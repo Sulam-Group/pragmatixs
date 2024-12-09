@@ -1,0 +1,10 @@
+program: train.py
+name: sweep_claim
+method: grid
+parameters:
+  listener_type:
+    value: "claim"
+  alpha:
+    value: 0.1
+  gamma:
+    values: [0.0, 0.01, 0.02]

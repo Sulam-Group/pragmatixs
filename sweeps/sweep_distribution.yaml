@@ -1,0 +1,10 @@
+program: /cis/home/jteneggi/repo/llm_pragmatixs/train.py
+name: sweep_distribution
+method: grid
+parameters:
+  listener_type:
+    value: "distribution"
+  alpha:
+    value: 0.0
+  temperature_scale:
+    values: [1, 2, 4, 8]
