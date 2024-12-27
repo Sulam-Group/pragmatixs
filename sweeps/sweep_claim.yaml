@@ -2,8 +2,8 @@ program: train.py
 name: sweep_claim
 method: grid
 parameters:
-  listener_type:
-    value: "claim"
+  config_name:
+    value: "cub_claim"
   alpha:
     value: 0.1
   gamma:

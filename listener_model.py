@@ -4,11 +4,7 @@ from typing import Iterable, Mapping
 import torch
 import torch.nn as nn
 
-from configs.utils import (
-    DistributionListenerConfig,
-    ListenerConfig,
-    TopicListenerConfig,
-)
+from configs import Config
 from transformer_model import _build_transformer
 
 
@@ -21,31 +17,15 @@ class ClaimListener(nn.Module):
         "attn_pooler_heads": 4,
     }
 
-    @classmethod
-    def from_pretrained(
-        cls,
-        config: ListenerConfig,
-        n_classes: int,
-        claims: Iterable[str],
-        device: torch.device,
-        workdir: str,
-    ):
-        listener = cls(config, n_classes, claims, device)
-        state_path = os.path.join(workdir, "weights", f"{config.run_name()}.pt")
-        state = torch.load(state_path, map_location=device)
-        listener.load_state_dict(state["listener"])
-        listener.eval()
-        return listener
-
     def __init__(
         self,
-        config: ListenerConfig,
+        config: Config,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
     ):
         super().__init__()
-        self.encoder_config["context_length"] = config.context_length
+        self.encoder_config["context_length"] = config.data.context_length
         self.n_classes = n_classes
         self.claims = claims
 
@@ -70,6 +50,22 @@ class ClaimListener(nn.Module):
     def init_parameters(self):
         nn.init.xavier_normal_(self.claim_embedding.weight)
         nn.init.zeros_(self.transformer.text_projection)
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        config: Config,
+        n_classes: int,
+        claims: Iterable[str],
+        device: torch.device,
+        workdir: str,
+    ):
+        listener = cls(config, n_classes, claims, device)
+        state_path = os.path.join(workdir, "weights", f"{config.run_name()}.pt")
+        state = torch.load(state_path, map_location=device)
+        listener.load_state_dict(state["listener"])
+        listener.eval()
+        return listener
 
     def build_cls_mask(self, explanation):
         cls_mask = (explanation != self.pad_token_id).unsqueeze(1)
@@ -128,7 +124,7 @@ class CUBTopicListener(ClaimListener):
 
     def __init__(
         self,
-        config: TopicListenerConfig,
+        config: Config,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
@@ -165,14 +161,14 @@ class CUBDistributionListener(ClaimListener):
 
     def __init__(
         self,
-        config: DistributionListenerConfig,
+        config: Config,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
     ):
         super().__init__(config, n_classes, claims, device)
         self.topic_prior = torch.tensor(config.prior, device=device)
-        self.temperature_scale = config.temperature_scale
+        self.temperature_scale = config.listener.temperature_scale
 
         with open(os.path.join(self.attribute_dir, "attribute_topic.txt"), "r") as f:
             lines = f.readlines()

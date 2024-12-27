@@ -51,8 +51,14 @@ def register_classifier(name: str):
     return register
 
 
-def get_classifier(name: str, **kwargs) -> ImageClassifier:
-    return classifiers[name]
+def get_classifier(
+    config: Config, from_pretrained=False, workdir=c.WORKDIR, device=c.DEVICE
+) -> ImageClassifier:
+    classifier_name = config.data.classifier.split(":")[0].lower()
+    Classifier = classifiers[classifier_name]
+    if from_pretrained:
+        return Classifier.from_pretrained(config, workdir=workdir, device=device)
+    raise NotImplementedError
 
 
 @register_classifier(name="clip")

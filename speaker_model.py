@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from _configs import Config
 from classifiers import ImageClassifier
+from configs import Config
 from transformer_model import _build_transformer
 
 
@@ -44,7 +44,7 @@ class ClaimSpeaker(nn.Module):
         device: torch.device,
     ):
         super().__init__()
-        self.multimodal_config["context_length"] = config.context_length
+        self.multimodal_config["context_length"] = config.data.context_length
         self.n_classes = n_classes
         self.claims = claims
 
@@ -75,12 +75,12 @@ class ClaimSpeaker(nn.Module):
     def forward(self, image_features, prediction, claim):
         claim_embedding = self.claim_embedding(claim)
 
-        class_embedding = self.class_embedding(prediction)
-        class_embedding = class_embedding.unsqueeze(1).expand(
-            -1, claim_embedding.size(1), -1
-        )
+        # class_embedding = self.class_embedding(prediction)
+        # class_embedding = class_embedding.unsqueeze(1).expand(
+        #     -1, claim_embedding.size(1), -1
+        # )
 
-        claim_embedding = claim_embedding + class_embedding
+        # claim_embedding = claim_embedding + class_embedding
         return self.transformer(image_features, claim_embedding)
 
     def explanation_logp(self, image_features, prediction, explanation):

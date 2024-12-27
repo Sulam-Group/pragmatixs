@@ -9,8 +9,8 @@ from torch.utils.data import Dataset
 from torchvision.datasets.folder import find_classes, make_dataset
 from tqdm import tqdm
 
-from configs.utils import Config
-from configs.utils import Constants as c
+from configs import Config
+from configs import Constants as c
 
 
 class DatasetWithAttributes(Dataset):

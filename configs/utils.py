@@ -6,10 +6,6 @@ import pandas as pd
 import torch
 from ml_collections import ConfigDict
 
-from classifiers import ImageClassifier, get_classifier
-from listener_model import ClaimListener, CUBDistributionListener, CUBTopicListener
-from speaker_model import ClaimSpeaker
-
 
 @dataclass
 class Constants:
@@ -72,35 +68,6 @@ class Config(ConfigDict):
             self.listener = TopicListenerConfig(**kwargs.get("listener", {}))
         elif self.data.listener_type == "distribution":
             self.listener = DistributionListenerConfig(**kwargs.get("listener", {}))
-
-    def get_listener(
-        self, n_classes: int, claims: Iterable[str], device=Constants.DEVICE
-    ):
-        assert self.data.dataset.lower == "cub"
-        "Only CUB dataset is supported"
-        if self.data.listener_type == "claim":
-            Listener = ClaimListener
-        elif self.data.listener_type == "topic":
-            Listener = CUBTopicListener
-        elif self.data.listener_type == "distribution":
-            Listener = CUBDistributionListener
-        return Listener(self.listener, n_classes, claims, device=device)
-
-    def get_speaker(
-        self,
-        classifier: ImageClassifier,
-        n_classes: int,
-        claims: Iterable[str],
-        device=Constants.DEVICE,
-    ):
-        return ClaimSpeaker(self, classifier, n_classes, claims, device=device)
-
-    def get_classifier(self, workdir=Constants.WORKDIR, device=Constants.DEVICE):
-        classifier_name = self.data.classifier.split(":")[0].lower()
-        Classifier = get_classifier(classifier_name)
-        classifier = Classifier.from_pretrained(self, workdir=workdir, device=device)
-        classifier.eval()
-        return classifier
 
     def run_name(self):
         dataset_name = self.data.dataset.lower()

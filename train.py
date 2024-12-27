@@ -10,16 +10,14 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 import wandb
-from classifiers import ImageClassifier
+from classifiers import ImageClassifier, get_classifier
 from configs import Config
 from configs import Constants as c
 from configs import get_config
 
 # from classifiers import CLIPClassifier
 from datasets import DatasetWithAttributes, get_dataset
-from listener_model import ClaimListener
-
-# from listener_model import ClaimListener, CUBDistributionListener, CUBTopicListener
+from listener_model import ClaimListener, CUBDistributionListener, CUBTopicListener
 from speaker_model import ClaimSpeaker
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -633,26 +631,17 @@ def main(args):
     workdir = args.workdir
 
     config = get_config(config_name)
+    if beta is not None:
+        config.speaker.beta = beta
+    if gamma is not None:
+        config.listener.gamma = gamma
+    if alpha is not None:
+        config.speaker.alpha = alpha
 
-    # data_dir = os.path.join(workdir, "data")
+    classifier = get_classifier(
+        config, from_pretrained=True, workdir=workdir, device=device
+    )
 
-    # backbone = "ViT-L/14"
-    # classifier = CLIPClassifier(backbone, device=device)
-    # classifier.eval()
-    classifier = config.get_classifier(workdir=workdir, device=device)
-
-    # train_dataset = CUB(
-    #     root=data_dir,
-    #     train=True,
-    #     transform=classifier.preprocess,
-    #     return_attribute=True,
-    # )
-    # val_dataset = CUB(
-    #     root=data_dir,
-    #     train=False,
-    #     transform=classifier.preprocess,
-    #     return_attribute=True,
-    # )
     train_dataset = get_dataset(
         config, train=True, transform=classifier.preprocess, return_attribute=True
     )
@@ -663,33 +652,21 @@ def main(args):
     classes = train_dataset.classes
     claims = train_dataset.claims
 
-    # Initialize config
-    # if listener_type == "claim":
-    #     config = configs.CUBClaimConfig(gamma=gamma, alpha=alpha)
-    #     Listener = ClaimListener
-    # elif listener_type == "topic":
-    #     config = configs.CUBTopicConfig(gamma=gamma, alpha=alpha)
-    #     Listener = CUBTopicListener
-    # elif listener_type == "distribution":
-    #     temperature_scale = args.temperature_scale
-    #     config = configs.CUBDistributionConfig(
-    #         gamma=gamma, alpha=alpha, temperature_scale=temperature_scale
-    #     )
-    #     Listener = CUBDistributionListener
-    # else:
-    #     raise ValueError(f"Unknown listener type: {listener_type}")
-
     # Initialize speaker model
-    # speaker = ClaimSpeaker(config, classifier, len(classes), claims, device=device)
-    speaker = config.get_speaker(classifier, len(classes), claims, device=device)
+    speaker = ClaimSpeaker(config, classifier, len(classes), claims, device=device)
     speaker_optimizer = initialize_optimizer(speaker, lr, wd)
     speaker_scheduler = torch.optim.lr_scheduler.StepLR(
         speaker_optimizer, step_size=5, gamma=0.5
     )
 
     # Initialize listener model
-    # listener = Listener(config, len(classes), claims, device=device)
-    listener = config.get_listener(len(classes), claims, device=device)
+    if config.data.listener_type == "claim":
+        Listener = ClaimListener
+    elif config.data.listener_type == "topic":
+        Listener = CUBTopicListener
+    elif config.data.listener_type == "distribution":
+        Listener = CUBDistributionListener
+    listener = Listener(config, len(classes), claims, device=device)
     listener_optimizer = initialize_optimizer(listener, lr, wd)
     listener_scheduler = torch.optim.lr_scheduler.StepLR(
         listener_optimizer, step_size=5, gamma=0.5
