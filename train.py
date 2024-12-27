@@ -9,39 +9,45 @@ from scipy.special import softmax
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-import configs
 import wandb
-from classifiers import CLIPClassifier
-from datasets import CUB
-from listener_model import ClaimListener, CUBDistributionListener, CUBTopicListener
+from classifiers import ImageClassifier
+from configs import Config
+from configs import Constants as c
+from configs import get_config
+
+# from classifiers import CLIPClassifier
+from datasets import DatasetWithAttributes, get_dataset
+from listener_model import ClaimListener
+
+# from listener_model import ClaimListener, CUBDistributionListener, CUBTopicListener
 from speaker_model import ClaimSpeaker
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = c.DEVICE
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_name", type=str, default=None)
-    parser.add_argument("--listener_type", type=str, default="claim")
     parser.add_argument(
-        "--beta", type=float, default=0.4, help="DPO regularization parameter"
+        "--beta", type=float, default=None, help="DPO regularization parameter"
     )
     parser.add_argument(
         "--gamma",
         type=float,
-        default=0.0,
+        default=None,
         help="Explanation length regularization parameter",
     )
     parser.add_argument(
         "--alpha",
         type=float,
-        default=0.1,
+        default=None,
         help="Listener action regularization parameter",
     )
     parser.add_argument(
         "--temperature_scale",
         type=float,
-        default=1.0,
+        default=None,
         help="Temperature scale for distribution listener",
     )
     # parser.add_argument(
@@ -52,7 +58,7 @@ def parse_args():
     # )
     parser.add_argument("--lr", type=float, default=1e-04, help="Learning rate")
     parser.add_argument("--wd", type=float, default=0.2, help="Weight decay")
-    parser.add_argument("--workdir", type=str, default="./")
+    parser.add_argument("--workdir", type=str, default=c.WORKDIR)
     return parser.parse_args()
 
 
@@ -158,7 +164,9 @@ class Monitor:
 
 
 @torch.no_grad()
-def create_prediction_dataset(dataset: CUB, classifier: CLIPClassifier):
+def create_prediction_dataset(
+    dataset: DatasetWithAttributes, classifier: ImageClassifier
+):
     classifier.eval()
 
     classes = dataset.classes
@@ -198,16 +206,16 @@ def create_prediction_dataset(dataset: CUB, classifier: CLIPClassifier):
 
 @torch.no_grad()
 def create_preference_dataset(
-    config: configs.Config,
+    config: Config,
     prediction_dataset: PredictionDataset,
     speaker: ClaimSpeaker,
     listener: ClaimListener,
 ):
     speaker.eval()
 
-    gamma = config.gamma
-    alpha = config.alpha
-    k = config.k
+    gamma = config.listener.gamma
+    alpha = config.speaker.alpha
+    k = config.speaker.k
 
     pair_mask = torch.combinations(torch.arange(k), r=2).numpy()
 
@@ -388,7 +396,7 @@ def create_explanation_dataset(
 
 
 def update_speaker(
-    config: configs.Config,
+    config: Config,
     preference_dataset: PreferenceDataset,
     speaker: ClaimSpeaker,
     optimizer: torch.optim.Optimizer,
@@ -397,7 +405,7 @@ def update_speaker(
 ):
     speaker.train()
 
-    beta = config.beta
+    beta = config.speaker.beta
 
     dataloader = DataLoader(preference_dataset, batch_size=16, shuffle=True)
 
@@ -484,7 +492,7 @@ def update_listener(
 
 
 def train_iteration(
-    config: configs.Config,
+    config: Config,
     prediction_dataset: PredictionDataset,
     speaker: ClaimSpeaker,
     listener: ClaimListener,
@@ -543,7 +551,7 @@ def train_iteration(
 @torch.no_grad()
 def evaluate(
     dataset: Dataset,
-    classifier: CLIPClassifier,
+    classifier: ImageClassifier,
     speaker: ClaimSpeaker,
     listener: ClaimListener,
     monitor: Monitor,
@@ -616,7 +624,7 @@ def initialize_optimizer(model: nn.Module, lr: float, weight_decay: float):
 
 
 def main(args):
-    listener_type = args.listener_type
+    config_name = args.config_name
     beta = args.beta
     gamma = args.gamma
     alpha = args.alpha
@@ -624,53 +632,64 @@ def main(args):
     wd = args.wd
     workdir = args.workdir
 
-    data_dir = os.path.join(workdir, "data")
+    config = get_config(config_name)
 
-    backbone = "ViT-L/14"
-    classifier = CLIPClassifier(backbone, device=device)
-    classifier.eval()
+    # data_dir = os.path.join(workdir, "data")
 
-    train_dataset = CUB(
-        root=data_dir,
-        train=True,
-        transform=classifier.preprocess,
-        return_attribute=True,
+    # backbone = "ViT-L/14"
+    # classifier = CLIPClassifier(backbone, device=device)
+    # classifier.eval()
+    classifier = config.get_classifier(workdir=workdir, device=device)
+
+    # train_dataset = CUB(
+    #     root=data_dir,
+    #     train=True,
+    #     transform=classifier.preprocess,
+    #     return_attribute=True,
+    # )
+    # val_dataset = CUB(
+    #     root=data_dir,
+    #     train=False,
+    #     transform=classifier.preprocess,
+    #     return_attribute=True,
+    # )
+    train_dataset = get_dataset(
+        config, train=True, transform=classifier.preprocess, return_attribute=True
     )
-    val_dataset = CUB(
-        root=data_dir,
-        train=False,
-        transform=classifier.preprocess,
-        return_attribute=True,
+    val_dataset = get_dataset(
+        config, train=False, transform=classifier.preprocess, return_attribute=True
     )
 
     classes = train_dataset.classes
     claims = train_dataset.claims
 
     # Initialize config
-    if listener_type == "claim":
-        config = configs.CUBClaimConfig(gamma=gamma, alpha=alpha)
-        Listener = ClaimListener
-    elif listener_type == "topic":
-        config = configs.CUBTopicConfig(gamma=gamma, alpha=alpha)
-        Listener = CUBTopicListener
-    elif listener_type == "distribution":
-        temperature_scale = args.temperature_scale
-        config = configs.CUBDistributionConfig(
-            gamma=gamma, alpha=alpha, temperature_scale=temperature_scale
-        )
-        Listener = CUBDistributionListener
-    else:
-        raise ValueError(f"Unknown listener type: {listener_type}")
+    # if listener_type == "claim":
+    #     config = configs.CUBClaimConfig(gamma=gamma, alpha=alpha)
+    #     Listener = ClaimListener
+    # elif listener_type == "topic":
+    #     config = configs.CUBTopicConfig(gamma=gamma, alpha=alpha)
+    #     Listener = CUBTopicListener
+    # elif listener_type == "distribution":
+    #     temperature_scale = args.temperature_scale
+    #     config = configs.CUBDistributionConfig(
+    #         gamma=gamma, alpha=alpha, temperature_scale=temperature_scale
+    #     )
+    #     Listener = CUBDistributionListener
+    # else:
+    #     raise ValueError(f"Unknown listener type: {listener_type}")
 
     # Initialize speaker model
-    speaker = ClaimSpeaker(config, classifier, len(classes), claims, device=device)
+    # speaker = ClaimSpeaker(config, classifier, len(classes), claims, device=device)
+    speaker = config.get_speaker(classifier, len(classes), claims, device=device)
     speaker_optimizer = initialize_optimizer(speaker, lr, wd)
     speaker_scheduler = torch.optim.lr_scheduler.StepLR(
         speaker_optimizer, step_size=5, gamma=0.5
     )
 
     # Initialize listener model
-    listener = Listener(config, len(classes), claims, device=device)
+    # listener = Listener(config, len(classes), claims, device=device)
+    listener = config.get_listener(len(classes), claims, device=device)
     listener_optimizer = initialize_optimizer(listener, lr, wd)
     listener_scheduler = torch.optim.lr_scheduler.StepLR(
         listener_optimizer, step_size=5, gamma=0.5
@@ -715,4 +734,5 @@ def main(args):
 
 
 if __name__ == "__main__":
-    main(parse_args())
+    args = parse_args()
+    main(args)

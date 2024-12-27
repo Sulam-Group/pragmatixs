@@ -1,23 +1,24 @@
+import os
+
 from configs.utils import Config, register_config
 
 
-@register_config(name="cub_claim")
+@register_config(name="cub_distribution")
 class CUBClaimConfig(Config):
     config = {
-        "name": "cub_claim",
         "data": {
             "dataset": "cub",
             "classifier": "CLIP:ViT-L/14",
             "context_length": 12,
-            "listener_type": "claim",
+            "listener_type": "distribution",
         },
         "speaker": {"beta": 0.4, "alpha": 0.1, "k": 8},
-        "listener": {"gamma": 0.01},
+        "listener": {"temperature_scale": 1.0},
     }
 
     def __init__(self):
         super().__init__(**self.config)
-        # self.name = os.path.basename(__file__).replace(".py", "")
+        self.name = os.path.basename(__file__).replace(".py", "")
         # data = self.data
         # data.dataset = "cub"
         # data.classifier = "CLIP:ViT-L/14"

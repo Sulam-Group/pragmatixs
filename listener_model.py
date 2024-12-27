@@ -4,7 +4,11 @@ from typing import Iterable, Mapping
 import torch
 import torch.nn as nn
 
-from configs import ClaimConfig, DistributionConfig, TopicConfig
+from configs.utils import (
+    DistributionListenerConfig,
+    ListenerConfig,
+    TopicListenerConfig,
+)
 from transformer_model import _build_transformer
 
 
@@ -20,7 +24,7 @@ class ClaimListener(nn.Module):
     @classmethod
     def from_pretrained(
         cls,
-        config: ClaimConfig,
+        config: ListenerConfig,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
@@ -35,7 +39,7 @@ class ClaimListener(nn.Module):
 
     def __init__(
         self,
-        config: ClaimConfig,
+        config: ListenerConfig,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
@@ -124,7 +128,7 @@ class CUBTopicListener(ClaimListener):
 
     def __init__(
         self,
-        config: TopicConfig,
+        config: TopicListenerConfig,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
@@ -161,7 +165,7 @@ class CUBDistributionListener(ClaimListener):
 
     def __init__(
         self,
-        config: DistributionConfig,
+        config: DistributionListenerConfig,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,

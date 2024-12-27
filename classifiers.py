@@ -21,12 +21,17 @@ class ImageClassifier(nn.Module):
         super().__init__()
         self.config = config
 
-        self.to(device)
+        self.embed_dim: int = None
+        self.preprocess: T.Compose = None
         self.device = device
+
+        self.to(device)
 
     @classmethod
     @abstractmethod
-    def from_pretrained(cls, config: Config, workdir=c.WORKDIR, device=c.DEVICE):
+    def from_pretrained(
+        cls, config: Config, workdir=c.WORKDIR, device=c.DEVICE
+    ) -> "ImageClassifier":
         pass
 
     @abstractmethod
@@ -176,70 +181,70 @@ class HAMBiomedCLIP(nn.Module):
         return pd.DataFrame(results)
 
 
-class MONET(CLIPClassifier):
-    backbone = "ViT-L/14"
-    weight_dir = os.path.join(os.path.dirname(__file__), "weights")
-    state_path = os.path.join(weight_dir, "monet.pt")
+# class MONET(CLIPClassifier):
+#     backbone = "ViT-L/14"
+#     weight_dir = os.path.join(os.path.dirname(__file__), "weights")
+#     state_path = os.path.join(weight_dir, "monet.pt")
 
-    templates = [
-        "This is dermatoscopy of {}",
-        "This is dermoscopy of {}",
-    ]
-    ref_prompts = [
-        "This is dermatoscopy",
-        "This is dermoscopy",
-    ]
+#     templates = [
+#         "This is dermatoscopy of {}",
+#         "This is dermoscopy of {}",
+#     ]
+#     ref_prompts = [
+#         "This is dermatoscopy",
+#         "This is dermoscopy",
+#     ]
 
-    def __init__(self, device: torch.device):
-        super().__init__(self.backbone, device)
-        self.preprocess = T.Compose(
-            [
-                T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
-                T.CenterCrop(224),
-                lambda x: x.convert("RGB"),
-                T.ToTensor(),
-                T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-            ]
-        )
+#     def __init__(self, device: torch.device):
+#         super().__init__(self.backbone, device)
+#         self.preprocess = T.Compose(
+#             [
+#                 T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
+#                 T.CenterCrop(224),
+#                 lambda x: x.convert("RGB"),
+#                 T.ToTensor(),
+#                 T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+#             ]
+#         )
 
-        state = torch.load(self.state_path, map_location=device)
-        self.model.load_state_dict(state)
+#         state = torch.load(self.state_path, map_location=device)
+#         self.model.load_state_dict(state)
 
-    @torch.no_grad()
-    def predict(self, dataset):
-        self.eval()
+#     @torch.no_grad()
+#     def predict(self, dataset):
+#         self.eval()
 
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+#         dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
 
-        attributes = dataset.claims
-        attributes = list(map(str.lower, attributes))
-        attribute_prompts = [t.format(a) for a in attributes for t in self.templates]
+#         attributes = dataset.claims
+#         attributes = list(map(str.lower, attributes))
+#         attribute_prompts = [t.format(a) for a in attributes for t in self.templates]
 
-        attribute_features = self.encode_text(attribute_prompts)
-        ref_features = self.encode_text(self.ref_prompts)
+#         attribute_features = self.encode_text(attribute_prompts)
+#         ref_features = self.encode_text(self.ref_prompts)
 
-        results = np.zeros((len(dataset), len(attributes)))
-        start = 0
-        for data in tqdm(dataloader):
-            image, _ = data
+#         results = np.zeros((len(dataset), len(attributes)))
+#         start = 0
+#         for data in tqdm(dataloader):
+#             image, _ = data
 
-            image = image.to(self.device)
+#             image = image.to(self.device)
 
-            attribute_output = self(image, text_features=attribute_features)
-            ref_output = self(image, text_features=ref_features)
+#             attribute_output = self(image, text_features=attribute_features)
+#             ref_output = self(image, text_features=ref_features)
 
-            attribute_logits = attribute_output["logits"]
-            ref_logits = ref_output["logits"]
+#             attribute_logits = attribute_output["logits"]
+#             ref_logits = ref_output["logits"]
 
-            attribute_logits = attribute_logits.view(
-                -1, len(attributes), len(self.templates)
-            )
-            ref_logits = ref_logits.unsqueeze(1).expand(-1, len(attributes), -1)
-            attribute_probs = torch.sigmoid(attribute_logits - ref_logits)
-            attribute_probs = torch.amax(attribute_probs, dim=-1)
+#             attribute_logits = attribute_logits.view(
+#                 -1, len(attributes), len(self.templates)
+#             )
+#             ref_logits = ref_logits.unsqueeze(1).expand(-1, len(attributes), -1)
+#             attribute_probs = torch.sigmoid(attribute_logits - ref_logits)
+#             attribute_probs = torch.amax(attribute_probs, dim=-1)
 
-            end = start + len(image)
-            results[start:end] = attribute_probs.cpu().numpy()
-            start = end
+#             end = start + len(image)
+#             results[start:end] = attribute_probs.cpu().numpy()
+#             start = end
 
-        return results
+#         return results

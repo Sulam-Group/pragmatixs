@@ -1,5 +1,5 @@
 import os
-from typing import Callable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -27,8 +27,10 @@ class DatasetWithAttributes(Dataset):
         self.transform = transform
         self.return_attribute = return_attribute
 
-        self.classes, self.samples = None, None
-        self.claims, self.image_attribute = None, None
+        self.classes: Iterable[str] = None
+        self.claims: Iterable[str] = None
+        self.samples = None
+        self.image_attribute = None
 
     def __len__(self):
         return len(self.samples)
@@ -49,11 +51,12 @@ class DatasetWithAttributes(Dataset):
 datasets: Mapping[str, DatasetWithAttributes] = {}
 
 
-def register_dataset(name: str):
+def register_dataset(name: str) -> DatasetWithAttributes:
     def register(cls: DatasetWithAttributes):
         if name in datasets:
             raise ValueError(f"Dataset {name} is already registered")
         datasets[name] = cls
+        return cls
 
     return register
 
@@ -65,7 +68,7 @@ def get_dataset(
     return_attribute=False,
     workdir=c.WORKDIR,
 ) -> DatasetWithAttributes:
-    dataset_name = config.dataset_name.lower()
+    dataset_name = config.data.dataset.lower()
     root = os.path.join(workdir, "data")
     Dataset = datasets[dataset_name]
     return Dataset(

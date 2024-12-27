@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from classifiers import CLIPClassifier
-from configs import Config
+from _configs import Config
+from classifiers import ImageClassifier
 from transformer_model import _build_transformer
 
 
@@ -22,7 +22,7 @@ class ClaimSpeaker(nn.Module):
     def from_pretrained(
         cls,
         config: Config,
-        classifier: CLIPClassifier,
+        classifier: ImageClassifier,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
@@ -38,7 +38,7 @@ class ClaimSpeaker(nn.Module):
     def __init__(
         self,
         config: Config,
-        classifier: CLIPClassifier,
+        classifier: ImageClassifier,
         n_classes: int,
         claims: Iterable[str],
         device: torch.device,
