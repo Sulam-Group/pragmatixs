@@ -1,0 +1,8 @@
+program: train.py
+name: sweep_alpha
+method: grid
+parameters:
+  config:
+    value: "cub_claim"
+  alpha:
+    values: [0.0, 0.1, 0.2, 0.4, 0.8, 1.6]

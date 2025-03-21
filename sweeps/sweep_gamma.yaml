@@ -1,0 +1,8 @@
+program: train.py
+name: sweep_gamma
+method: grid
+parameters:
+  config:
+    value: "cub_claim"
+  gamma:
+    values: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]

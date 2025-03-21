@@ -1,3 +1,2 @@
-import configs.cub_claim
-import configs.cub_distribution
+import configs.cub
 from configs.utils import *

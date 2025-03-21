@@ -1,0 +1,10 @@
+program: train.py
+name: sweep_listener_k
+method: grid
+parameters:
+  config:
+    value: "cub_claim"
+  alpha:
+    value: 0.2
+  listener_k:
+    values: [2, 4, 6, 8, 10, 12]

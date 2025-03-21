@@ -162,10 +162,11 @@ cython_debug/
 #.idea/
 
 data
+embed_cache
 results
 graveyard
 _results
 _weights
 batches
 wandb
-weights
+weights*

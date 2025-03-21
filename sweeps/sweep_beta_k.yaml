@@ -1,0 +1,10 @@
+program: train.py
+name: sweep_beta_k
+method: grid
+parameters:
+  config:
+    value: "cub_claim"
+  k:
+    values: [4, 6, 8]
+  beta:
+    values: [0.4, 0.6, 0.8, 1.0]

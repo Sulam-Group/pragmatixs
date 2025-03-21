@@ -1,16 +1,16 @@
 import os
-from typing import Callable, Iterable, Mapping
+from typing import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
-import torch
+import torchvision.transforms as T
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.datasets.folder import find_classes, make_dataset
 from tqdm import tqdm
 
 from configs import Config
-from configs import Constants as c
+from configs import Constants as C
 
 
 class DatasetWithAttributes(Dataset):
@@ -18,7 +18,7 @@ class DatasetWithAttributes(Dataset):
         self,
         root: str,
         train: bool = True,
-        transform: Callable[[Image.Image], torch.Tensor] = None,
+        transform: T.Compose = None,
         return_attribute: bool = False,
     ):
         super().__init__()
@@ -66,7 +66,7 @@ def get_dataset(
     train=True,
     transform=None,
     return_attribute=False,
-    workdir=c.WORKDIR,
+    workdir=C.workdir,
 ) -> DatasetWithAttributes:
     dataset_name = config.data.dataset.lower()
     root = os.path.join(workdir, "data")
@@ -231,7 +231,8 @@ class SKINCON(Dataset):
         metadata = pd.read_csv(metadata_path)
 
         with open(os.path.join(root, "SKINCON", "attributes.txt"), "r") as f:
-            self.attributes = f.read().splitlines()
+            lines = f.readlines()
+            self.attributes = [line.strip() for line in lines]
 
         metadata.rename(
             columns={

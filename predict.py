@@ -1,42 +1,62 @@
+import argparse
 import os
 
 import numpy as np
-import pandas as pd
-import torch
 from sklearn.metrics import confusion_matrix
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from classifiers import MONET, CLIPClassifier, HAMBiomedCLIP
-from datasets import CUB, HAM, SKINCON
+from classifiers import get_classifier
+from configs import Constants as C
+from configs import get_config
+from datasets import get_dataset
 
-workdir = os.path.dirname(__file__)
-data_dir = os.path.join(workdir, "data")
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = C.device
 
-# backbone = "ViT-L/14"
-# backbone_safe = backbone.lower().replace("/", "_")
-# classifier = CLIPClassifier(backbone, device=device)
-# classifier = HAMBiomedCLIP.from_pretrained(workdir, device)
-classifier = MONET(device=device)
 
-# dataset = CUB(root=data_dir, train=False, transform=classifier.preprocess)
-# dataset = HAM(root=data_dir, train=False, transform=classifier.preprocess)
-dataset = SKINCON(data_dir, transform=classifier.preprocess)
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="None")
+    parser.add_argument("--workdir", type=str, default=C.workdir)
+    return parser.parse_args()
 
-results = classifier.predict(dataset)
-# results.to_csv(os.path.join(workdir, "results", f"CUB_{backbone_safe}.csv"))
-# results.to_csv(os.path.join(workdir, "results", f"HAM_biomedclip.csv"))
-np.save(os.path.join(workdir, "results", "skincon_monet.npy"), results)
 
-# confusion = confusion_matrix(results["label"], results["prediction"], normalize="true")
-# accuracy = np.diag(confusion)
+def main(args):
+    config_name = args.config
+    workdir = args.workdir
 
-# sorted_idx = np.argsort(accuracy)[::-1]
-# sorted_classes = [dataset.classes[idx] for idx in sorted_idx]
-# sorted_accuracy = accuracy[sorted_idx]
+    config = get_config(config_name)
 
-# print("Results:")
-# for class_name, acc in zip(sorted_classes, sorted_accuracy):
-#     print(f"\t {class_name}: {acc:.2%}")
-# print(f"Average accuracy: {accuracy.mean():.2%}")
+    classifier = get_classifier(
+        config, from_pretrained=True, workdir=workdir, device=device
+    )
+
+    dataset = get_dataset(
+        config, train=False, transform=classifier.preprocess, workdir=workdir
+    )
+
+    results = classifier.predict(dataset)
+
+    confusion = confusion_matrix(
+        results["label"], results["prediction"], normalize="true"
+    )
+    accuracy = np.diag(confusion)
+
+    sorted_idx = np.argsort(accuracy)[::-1]
+    sorted_classes = [dataset.classes[idx] for idx in sorted_idx]
+    sorted_accuracy = accuracy[sorted_idx]
+
+    print("Results:")
+    for class_name, acc in zip(sorted_classes, sorted_accuracy):
+        print(f"\t{class_name:<20}: {acc:.2%}")
+    print(f"Average accuracy: {accuracy.mean():.2%}")
+
+    results_dir = os.path.join(workdir, "results", config.data.dataset.lower())
+    os.makedirs(results_dir, exist_ok=True)
+
+    classifier_safe = config.data.classifier.lower().replace(":", "_").replace("/", "_")
+    results_path = os.path.join(results_dir, f"{classifier_safe}.csv")
+    results.to_csv(results_path)
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)
