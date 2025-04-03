@@ -63,9 +63,9 @@ def register_dataset(name: str) -> DatasetWithAttributes:
 
 def get_dataset(
     config: Config,
-    train=True,
-    transform=None,
-    return_attribute=False,
+    train: bool = True,
+    transform: T.Compose = None,
+    return_attribute: bool = False,
     workdir=C.workdir,
 ) -> DatasetWithAttributes:
     dataset_name = config.data.dataset.lower()
@@ -78,7 +78,13 @@ def get_dataset(
 
 @register_dataset(name="cub")
 class CUB(DatasetWithAttributes):
-    def __init__(self, root, train=False, transform=None, return_attribute=False):
+    def __init__(
+        self,
+        root: str,
+        train: bool = False,
+        transform: T.Compose = None,
+        return_attribute: bool = False,
+    ):
         super().__init__(
             root, train=train, transform=transform, return_attribute=return_attribute
         )
@@ -153,112 +159,38 @@ class CUB(DatasetWithAttributes):
         return claims, np.load(op_image_attribute_path)
 
 
-@register_dataset(name="ham")
-class HAM(DatasetWithAttributes):
-    wnids_to_idx = {
-        "akiec": 0,
-        "bcc": 1,
-        "bkl": 2,
-        "df": 3,
-        "nv": 4,
-        "mel": 5,
-        "vasc": 6,
+@register_dataset(name="imagenette")
+class Imagenette(DatasetWithAttributes):
+    WNID_TO_CLASS = {
+        "n01440764": ("tench", "Tinca tinca"),
+        "n02102040": ("English springer", "English springer spaniel"),
+        "n02979186": ("cassette player",),
+        "n03000684": ("chainsaw", "chain saw"),
+        "n03028079": ("church", "church building"),
+        "n03394916": ("French horn", "horn"),
+        "n03417042": ("garbage truck", "dustcart"),
+        "n03425413": ("gas pump", "gasoline pump", "petrol pump", "island dispenser"),
+        "n03445777": ("golf ball",),
+        "n03888257": ("parachute", "chute"),
     }
 
     def __init__(
-        self, root, train=False, transform=None, return_attribute=False, finetune=False
+        self,
+        root: str,
+        train: bool = False,
+        transform: T.Compose = None,
+        return_attribute: bool = False,
     ):
         super().__init__(
             root, train=train, transform=transform, return_attribute=return_attribute
         )
-        if finetune:
-            self.op = "finetune"
-        else:
-            self.op = "train" if train else "test"
+        self.op = "train" if train else "test"
 
-        self.classes = [
-            "actinic keratosis",
-            "basal cell carcinoma",
-            "benign keratosis",
-            "dermatofibroma",
-            "melanocytic nevi",
-            "melanoma",
-            "vascular lesions",
-        ]
-        self.samples = self.get_samples()
+        self.classes, self.samples = self.get_classes_and_samples()
         self.claims, self.image_attribute = self.get_claims_and_image_attributes()
 
-    def get_samples(self):
-        ham_dir = os.path.join(self.root, "HAM10000")
-        image_dir = os.path.join(ham_dir, "images")
-
-        with open(os.path.join(ham_dir, f"{self.op}_images.txt"), "r") as f:
-            op_filenames = f.readlines()
-            op_filenames = [filename.strip() for filename in op_filenames]
-
-        metadata = pd.read_csv(os.path.join(ham_dir, "metadata.csv"))
-        filenames = metadata["image_id"].values.tolist()
-        diagnoses = metadata["dx"].values.tolist()
-
-        return [
-            (os.path.join(image_dir, f"{filename}.jpg"), self.wnids_to_idx[dx])
-            for filename, dx in zip(filenames, diagnoses)
-            if filename in op_filenames
-        ]
-
-    def get_claims_and_image_attributes(self):
-        skincon_dir = os.path.join(self.root, "SKINCON")
-        attribute_dir = os.path.join(self.root, "HAM10000", "attributes")
-
-        with open(os.path.join(skincon_dir, "attributes.txt"), "r") as f:
-            lines = f.readlines()
-            claims = [line.strip() for line in lines]
-
-        image_attribute = np.load(
-            os.path.join(attribute_dir, f"{self.op}_image_attribute.npy")
-        )
-        return claims, image_attribute
-
-
-class SKINCON(Dataset):
-    def __init__(self, root, transform=None):
-        super().__init__()
-        self.root = root
-        self.transform = transform
-
-        image_root = os.path.join(root, "SKINCON", "Fitz17k", "images")
-        metadata_path = os.path.join(root, "SKINCON", "image.csv")
-        metadata = pd.read_csv(metadata_path)
-
-        with open(os.path.join(root, "SKINCON", "attributes.txt"), "r") as f:
-            lines = f.readlines()
-            self.attributes = [line.strip() for line in lines]
-
-        metadata.rename(
-            columns={
-                "Brown(Hyperpigmentation)": "Hyperpigmentation",
-                "White(Hypopigmentation)": "Hypopigmentation",
-            },
-            inplace=True,
-        )
-        metadata = metadata[metadata["Do not consider this image"] == 0]
-        image_idx = metadata["ImageID"].values.tolist()
-        image_attribute = metadata[self.attributes].values.tolist()
-
-        self.samples = [
-            (os.path.join(image_root, f"{idx}"), attribute)
-            for idx, attribute in zip(image_idx, image_attribute)
-            if os.path.exists(os.path.join(image_root, f"{idx}"))
-        ]
-        self.image_attribute = [attribute for _, attribute in self.samples]
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        path, attribute = self.samples[idx]
-        image = Image.open(path).convert("RGB")
-
-        if self.transform is not None:
-            image = self.transform(image)
-        return image, attribute
+    def get_classes_and_samples(self):
+        image_root = os.path.join(self.root, "imagenette", self.op)
+        wnids, wnid_to_idx = find_classes(image_root)
+        classes = [self.WNID_TO_CLASS[wnid][0] for wnid in wnids]
+        samples = make_dataset(image_root, wnid_to_idx, extensions=".jpeg")
