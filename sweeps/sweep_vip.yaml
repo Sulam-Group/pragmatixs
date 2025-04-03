@@ -1,0 +1,16 @@
+program: vip.py
+name: sweep_vip
+method: grid
+parameters:
+  max_queries:
+    values: [311, 6, 12, 18, 24, 30]
+  sampling:
+    value: "biased"
+command:
+  - torchrun
+  - --nproc-per-node=4
+  - ${program}
+  - --config=cub
+  - train
+  - ${args}
+  - --dist

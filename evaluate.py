@@ -12,7 +12,7 @@ from configs import Config
 from configs import Constants as C
 from configs import get_config
 from datasets import get_dataset
-from listeners import Listener, get_listener
+from listeners import Listener, TopicListener, get_listener
 from speaker import ClaimSpeaker
 
 device = C.device
@@ -21,47 +21,8 @@ device = C.device
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
-    # parser.add_argument("--alpha", type=float, default=None)
     parser.add_argument("--workdir", type=str, default=C.workdir)
     return parser.parse_args()
-
-
-def register_gen_attention_hook(speaker: ClaimSpeaker):
-    def _hook(module, input, output):
-        global gen_attn_weights
-        gen_attn_weights = output[1]
-
-    speaker.attn_pool_gen.attn.register_forward_hook(_hook)
-
-
-def register_cross_attention_hook(speaker: ClaimSpeaker):
-    global cross_attn_weights
-    cross_attn_weights = []
-
-    def _hook(module, input, output):
-        cross_attn_weights.append(output[1][:, -1])
-
-    speaker.decoder.cross_attn[-2].attn.register_forward_hook(_hook)
-
-
-def register_unimodal_embedding_hook(speaker: ClaimSpeaker):
-    global unimodal_embeddings
-    unimodal_embeddings = []
-
-    def _hook(module, input, output):
-        unimodal_embeddings.append(output[:, -1])
-
-    speaker.text.ln_final.register_forward_hook(_hook)
-
-
-def register_multimodal_embedding_hook(speaker: ClaimSpeaker):
-    global multimodal_embeddings
-    multimodal_embeddings = []
-
-    def _hook(module, input, output):
-        multimodal_embeddings.append(output[:, -1])
-
-    speaker.decoder.ln_final.register_forward_hook(_hook)
 
 
 def register_cls_attention_hook(listener: Listener):
@@ -73,19 +34,11 @@ def register_cls_attention_hook(listener: Listener):
 
     for resblock in listener.text.transformer.resblocks:
         resblock.attn.register_forward_hook(_hook)
-    # listener.text.transformer.resblocks[-1].attn.register_forward_hook(_hook)
 
 
 @torch.no_grad()
 def evaluate(config: Config, workdir=C.workdir):
     print(f"Evaluating {config.run_name()}")
-    # config_name = args.config
-    # alpha = args.alpha
-    # workdir = args.workdir
-
-    # config = get_config(config_name)
-    # if alpha is not None:
-    #     config.speaker.alpha = alpha
 
     classifier = get_classifier(
         config, from_pretrained=True, workdir=workdir, device=device
@@ -101,10 +54,6 @@ def evaluate(config: Config, workdir=C.workdir):
     speaker = ClaimSpeaker.from_pretrained(
         config, classifier, claims, workdir=workdir, device=device
     )
-    # register_gen_attention_hook(speaker)
-    # register_cross_attention_hook(speaker)
-    # register_unimodal_embedding_hook(speaker)
-    # register_multimodal_embedding_hook(speaker)
 
     Listener = get_listener(config.listener.type)
     listener = Listener.from_pretrained(
@@ -112,38 +61,26 @@ def evaluate(config: Config, workdir=C.workdir):
     )
     register_cls_attention_hook(listener)
 
+    topic_listener = TopicListener(
+        config, len(classes), claims, workdir=workdir, device=device
+    )
+
     evaluation_data = {
         "idx": np.arange(len(dataset)).tolist(),
         "label": [],
         "prediction": [],
         "explanation": [],
+        "explanation_topics": [],
         "consistency": [],
         "logp": [],
-        # "explanation_topics": -np.ones((len(dataset), context_length)),
-        # "gen_attention": [],
-        # "cross_attention": [],
-        # "unimodal_embeddings": [],
-        # "multimodal_embeddings": [],
         "cls_attention": [],
         "action": [],
     }
 
-    if config.listener.type == "topic":
-        evaluation_data["explanation_topics"] = []
-    if config.listener.type == "region":
-        evaluation_data["explanation_regions"] = []
-
-    # with open(
-    #     os.path.join(data_dir, "CUB", "attributes", "attribute_topic.txt"), "r"
-    # ) as f:
-    #     lines = f.readlines()
-    #     lines = [line.strip().split() for line in lines]
-    #     attribute_to_topic = {attribute: int(idx) for attribute, idx in lines}
-
-    # claim_topic = -np.ones(speaker.vocab_size)
-    # for idx, claim in enumerate(claims):
-    #     if claim in attribute_to_topic:
-    #         claim_topic[idx] = attribute_to_topic[claim]
+    # if config.listener.type == "topic":
+    #     evaluation_data["explanation_topics"] = []
+    # if config.listener.type == "region":
+    #     evaluation_data["explanation_regions"] = []
 
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
     for _, data in enumerate(tqdm(dataloader)):
@@ -160,14 +97,13 @@ def evaluate(config: Config, workdir=C.workdir):
         explanation, logp = speaker.explain(image_tokens)
         consistency, action = listener.listen(image_attribute, explanation)
 
-        if config.listener.type == "topic":
-            explanation_topic = listener.get_explanation_topic(explanation)
-            explanation_topic = explanation_topic.cpu().numpy()
-            evaluation_data["explanation_topics"].extend(explanation_topic)
-        if config.listener.type == "region":
-            explanation_regions = listener.get_explanation_regions(explanation)
-            explanation_regions = explanation_regions.cpu().numpy()
-            evaluation_data["explanation_regions"].extend(explanation_regions)
+        explanation_topic = topic_listener.get_explanation_topic(explanation)
+        explanation_topic = explanation_topic.cpu().numpy()
+        evaluation_data["explanation_topics"].extend(explanation_topic)
+        # if config.listener.type == "region":
+        #     explanation_regions = listener.get_explanation_regions(explanation)
+        #     explanation_regions = explanation_regions.cpu().numpy()
+        #     evaluation_data["explanation_regions"].extend(explanation_regions)
 
         label = label.numpy()
         prediction = prediction.cpu().numpy()
@@ -175,26 +111,6 @@ def evaluate(config: Config, workdir=C.workdir):
         logp = logp.squeeze().cpu().numpy()
         consistency = consistency.squeeze().cpu().numpy()
         action = action.squeeze().cpu().numpy()
-
-        # explanation_topic = claim_topic[explanation]
-
-        # global gen_attn_weights
-        # global cross_attn_weights
-        # _cross_attn_weights = torch.stack(cross_attn_weights, dim=1)
-        # _cross_attn_weights = torch.bmm(_cross_attn_weights, gen_attn_weights)
-        # _cross_attn_weights = torch.softmax(_cross_attn_weights, dim=-1)
-        # _cross_attn_weights = _cross_attn_weights.cpu().numpy()
-        # cross_attn_weights = []
-
-        # global unimodal_embeddings
-        # _unimodal_embeddings = torch.stack(unimodal_embeddings, dim=1)
-        # _unimodal_embeddings = _unimodal_embeddings.cpu().numpy()
-        # unimodal_embeddings = []
-
-        # global multimodal_embeddings
-        # _multimodal_embeddings = torch.stack(multimodal_embeddings, dim=1)
-        # _multimodal_embeddings = _multimodal_embeddings.cpu().numpy()
-        # multimodal_embeddings = []
 
         global cls_attn_weights
         _cls_attn_weights = torch.stack(cls_attn_weights, dim=1)
@@ -207,11 +123,6 @@ def evaluate(config: Config, workdir=C.workdir):
         evaluation_data["explanation"].extend(explanation.astype(int))
         evaluation_data["consistency"].extend(consistency.tolist())
         evaluation_data["logp"].extend(logp.tolist())
-        # evaluation_data["explanation_topics"][start:end] = explanation_topic
-        # evaluation_data["gen_attention"].extend(gen_attn_weights.cpu().numpy())
-        # evaluation_data["cross_attention"].extend(_cross_attn_weights)
-        # evaluation_data["unimodal_embeddings"].extend(_unimodal_embeddings)
-        # evaluation_data["multimodal_embeddings"].extend(_multimodal_embeddings)
         evaluation_data["cls_attention"].extend(_cls_attn_weights)
         evaluation_data["action"].extend(action)
 
