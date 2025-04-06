@@ -19,7 +19,7 @@ class PredictionDataset(Dataset):
         workdir=C.workdir,
         device=C.device,
     ):
-        cache_dir = os.path.join(workdir, "embed_cache")
+        cache_dir = os.path.join(workdir, "data", "embed_cache")
         self.embed_dir = embed_dir = os.path.join(
             cache_dir,
             f"{config.data.dataset.lower()}_{config.classifier_name()}",

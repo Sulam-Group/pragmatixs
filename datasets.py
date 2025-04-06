@@ -159,21 +159,8 @@ class CUB(DatasetWithAttributes):
         return claims, np.load(op_image_attribute_path)
 
 
-@register_dataset(name="imagenette")
-class Imagenette(DatasetWithAttributes):
-    WNID_TO_CLASS = {
-        "n01440764": ("tench", "Tinca tinca"),
-        "n02102040": ("English springer", "English springer spaniel"),
-        "n02979186": ("cassette player",),
-        "n03000684": ("chainsaw", "chain saw"),
-        "n03028079": ("church", "church building"),
-        "n03394916": ("French horn", "horn"),
-        "n03417042": ("garbage truck", "dustcart"),
-        "n03425413": ("gas pump", "gasoline pump", "petrol pump", "island dispenser"),
-        "n03445777": ("golf ball",),
-        "n03888257": ("parachute", "chute"),
-    }
-
+@register_dataset(name="imagenet")
+class ImageNet(DatasetWithAttributes):
     def __init__(
         self,
         root: str,
@@ -184,13 +171,29 @@ class Imagenette(DatasetWithAttributes):
         super().__init__(
             root, train=train, transform=transform, return_attribute=return_attribute
         )
-        self.op = "train" if train else "test"
+        self.op = "train" if train else "val"
 
         self.classes, self.samples = self.get_classes_and_samples()
-        self.claims, self.image_attribute = self.get_claims_and_image_attributes()
+        # self.claims, self.image_attribute = self.get_claims_and_image_attributes()
 
     def get_classes_and_samples(self):
-        image_root = os.path.join(self.root, "imagenette", self.op)
-        wnids, wnid_to_idx = find_classes(image_root)
-        classes = [self.WNID_TO_CLASS[wnid][0] for wnid in wnids]
-        samples = make_dataset(image_root, wnid_to_idx, extensions=".jpeg")
+        dataset_dir = os.path.join(self.root, "ImageNet")
+        with open(os.path.join(dataset_dir, "wnids_to_class.txt")) as f:
+            lines = f.readlines()
+            wnids_to_class = {}
+            for line in lines:
+                chunks = [c.strip() for c in line.split()]
+                wnid = chunks[0]
+                classes = chunks[1:]
+                wnids_to_class[wnid] = classes
+
+        with open(os.path.join(dataset_dir, "top_classes.txt"), "r") as f:
+            lines = f.readlines()
+            lines = [line.strip().split() for line in lines]
+            wnids = [wnid for wnid, _, _ in lines]
+            wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+        image_dir = os.path.join(dataset_dir, self.op)
+        classes = [wnids_to_class[wnid][0] for wnid in wnids]
+        samples = make_dataset(image_dir, wnid_to_idx, extensions=".jpeg")
+        return classes, samples
