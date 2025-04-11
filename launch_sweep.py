@@ -36,7 +36,12 @@ def zip_code_with_excludes(zip_path, exclude_dirs=None, exclude_exts=None):
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in Path(".").rglob("*"):
             if file.is_file():
-                relative_path = file.relative_to(Path.cwd())
+                root_dir = Path('.').resolve()
+                try:
+                    relative_path = file.resolve().relative_to(root_dir.resolve())
+                except ValueError:
+                    print(f"Skipping file not under root: {file}")
+                    continue
                 # Skip files in excluded directories
                 if any(part in exclude_dirs for part in relative_path.parts):
                     continue
