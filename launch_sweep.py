@@ -31,7 +31,7 @@ def zip_code_with_excludes(zip_path, exclude_dirs=None, exclude_exts=None):
         exclude_exts (set): File extensions to exclude (e.g., {".log", ".pyc"}).
     """
     exclude_dirs = exclude_dirs or {".venv", "wandb", "weights", "logs", "__pycache__", "data", "data", "embed_cache"}
-    exclude_exts = exclude_exts or {".log", ".pyc", ".tmp", ".git", "nohup.out"}
+    exclude_exts = exclude_exts or {".log", ".pyc", ".tmp", ".git", "nohup.out", '.gitignore'}
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in Path(".").rglob("*"):
