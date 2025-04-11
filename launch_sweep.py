@@ -21,17 +21,29 @@ def get_git_commit():
         return "unknown"
 
 
-def zip_code(code_files, zip_path):
-    """Create a zip archive of specified code files and folders."""
+def zip_code_with_excludes(zip_path, exclude_dirs=None, exclude_exts=None):
+    """
+    Create a zip archive of the current directory, excluding certain folders and file types.
+
+    Args:
+        zip_path (str): Output path for the zip file.
+        exclude_dirs (set): Folder names to exclude (e.g., {".git", "wandb", "logs"}).
+        exclude_exts (set): File extensions to exclude (e.g., {".log", ".pyc"}).
+    """
+    exclude_dirs = exclude_dirs or {".venv", "wandb", "weights", "logs", "__pycache__", "data", "data", "embed_cache"}
+    exclude_exts = exclude_exts or {".log", ".pyc", ".tmp", ".git", "nohup.out"}
+
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        for item in code_files:
-            item = Path(item)
-            if item.is_dir():
-                for file in item.rglob("*"):
-                    if file.is_file():
-                        zipf.write(file, file.relative_to(Path.cwd()))
-            elif item.is_file():
-                zipf.write(item, item.relative_to(Path.cwd()))
+        for file in Path(".").rglob("*"):
+            if file.is_file():
+                relative_path = file.relative_to(Path.cwd())
+                # Skip files in excluded directories
+                if any(part in exclude_dirs for part in relative_path.parts):
+                    continue
+                # Skip files with excluded extensions
+                if file.suffix in exclude_exts:
+                    continue
+                zipf.write(file, relative_path)
 
 
 def run_agent_on_gpu(sweep_id, zip_path, commit, gpu_id):
@@ -69,12 +81,6 @@ def main():
         "--sweep_id", required=True, help="W&B sweep ID (e.g., user/project/sweepid)"
     )
     parser.add_argument(
-        "--code",
-        nargs="+",
-        default=["train.py"],
-        help="Code files or folders to snapshot",
-    )
-    parser.add_argument(
         "--zip_path",
         default="sweep_code_snapshot.zip",
         help="Path for the zipped snapshot",
@@ -89,7 +95,7 @@ def main():
     print(f"✅ Git commit: {commit}")
 
     print("📦 Creating code snapshot...")
-    zip_code(args.code, args.zip_path)
+    zip_code_with_excludes(args.zip_path)
     print(f"✅ Code archived at {args.zip_path}")
 
     print("🚀 Launching sweep agents on GPUs:", args.gpus)

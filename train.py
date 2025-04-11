@@ -24,8 +24,8 @@ from train_utils import (
     initialize_optimizer,
 )
 
-# device = 'C.device'
-device = 'cuda:1'
+device = 'C.device'
+
 monitor = Monitor()
 
 
