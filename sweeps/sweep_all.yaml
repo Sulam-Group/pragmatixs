@@ -7,6 +7,6 @@ parameters:
   alpha:
     values: [0.0, 0.2]
   gamma:
-    values: [0.2, 0.4, 0.6]
+    values: [0.0, 0.2, 0.4]
   explanation_length:
-    values: [4, 8, 10, 12]
+    values: [4, 8, 12]
