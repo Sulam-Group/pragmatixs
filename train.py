@@ -340,14 +340,14 @@ def main(args):
         config, val_dataset, workdir=workdir, device=device
     )
     
-    print("Evaluating pretrained classifier (Training set)")
-    evaluate_classifier(
-        train_dataset, train_prediction_dataset, classifier, device=device
-    )
-    print("Evaluating pretrained classifier (Test set)")
-    evaluate_classifier(
-        val_dataset, val_prediction_dataset, classifier, device=device
-    )
+    # print("Evaluating pretrained classifier (Training set)")
+    # evaluate_classifier(
+    #     train_dataset, train_prediction_dataset, classifier, device=device
+    # )
+    # print("Evaluating pretrained classifier (Test set)")
+    # evaluate_classifier(
+    #     val_dataset, val_prediction_dataset, classifier, device=device
+    # )
 
     run_name = config.run_name()
     wandb.init(project="pragmatics", name=run_name, config=config.to_dict())
