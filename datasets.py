@@ -193,6 +193,9 @@ class CheXpert(DatasetWithAttributes):
     def get_classes_and_samples(self):
         image_dir = os.path.join(self.root, "chexpert", self.op)
         patient_ids = os.listdir(image_dir)
+        # only keep the patients with id < 10000 (for training)
+        if self.op == "train":
+            patient_ids = [i for i in patient_ids if int(i.removeprefix("patient")) < 10000]
         image_paths = list(self.info_df.index)
         image_paths = [os.path.join(image_dir, i.split('/')[2], '/'.join(i.split('/')[3:])) for i in image_paths if i.split('/')[2] in patient_ids]
         labels = list(self.info_df[self.TASK])
