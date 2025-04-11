@@ -37,7 +37,9 @@ class DatasetWithAttributes(Dataset):
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
-        image = Image.open(path).convert("RGB")
+        image = Image.open(path)
+        # if ":
+        #     image = image.convert("RGB")
 
         if self.transform is not None:
             image = self.transform(image)
@@ -158,6 +160,66 @@ class CUB(DatasetWithAttributes):
 
         return claims, np.load(op_image_attribute_path)
 
+
+@register_dataset(name="chexpert")
+class CheXpert(DatasetWithAttributes):
+    def __init__(
+        self,
+        root: str,
+        train: bool = False,
+        transform: T.Compose = None,
+        return_attribute: bool = False,
+    ):
+        super().__init__(
+            root, train=train, transform=transform, return_attribute=return_attribute
+        )
+        self.TASK = 'Lung Opacity'
+        self.op = "train" if train else "val"
+        if self.op == "train":
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "train_visualCheXbert.csv"),
+                header=0,
+                index_col=0,
+            )
+        else:
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "val.csv"),
+                header=0,
+                index_col=0,
+            )
+        self.classes, self.samples = self.get_classes_and_samples()
+        self.claims, self.image_attribute = self.get_claims_and_image_attributes()
+
+    def get_classes_and_samples(self):
+        image_dir = os.path.join(self.root, "chexpert", self.op)
+        patient_ids = os.listdir(image_dir)
+        image_paths = list(self.info_df.index)
+        image_paths = [os.path.join(image_dir, i.split('/')[2], '/'.join(i.split('/')[3:])) for i in image_paths if i.split('/')[2] in patient_ids]
+        labels = list(self.info_df[self.TASK])
+        classes = [f"No signs of {self.TASK}", f"Findings suggesting {self.TASK}"]
+        samples = [(image_path, label) for image_path, label in zip(image_paths, labels)]
+        return classes, samples
+
+    def get_claims_and_image_attributes(self):
+        claims = [
+            'Enlarged Cardiomediastinum',
+            'Lung Opacity',
+            'Cardiomegaly',
+            'Lung Lesion',
+            'Edema',
+            'Consolidation',
+            'Pneumonia',
+            'Atelectasis',
+            'Pneumothorax',
+            'Pleural Effusion',
+            'Pleural Other',
+            'Fracture',
+            'Support Devices'
+        ]
+        claims = [i for i in claims if i != self.TASK]
+        image_attribute = self.info_df[claims].values
+        return claims, image_attribute
+    
 
 @register_dataset(name="imagenette")
 class Imagenette(DatasetWithAttributes):

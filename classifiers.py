@@ -15,8 +15,16 @@ from pydantic import BaseModel
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+from pathlib import Path
 from configs.utils import Config
 from configs.utils import Constants as c
+
+from health_multimodal.image import ImageInferenceEngine
+from health_multimodal.image.data.transforms import (
+    create_chest_xray_transform_for_inference,
+)
+from health_multimodal.image.model.pretrained import get_biovil_t_image_encoder
+from health_multimodal.text.utils import BertEncoderType, get_bert_inference
 
 
 class ImageClassifier(nn.Module):
@@ -91,8 +99,9 @@ class OpenClipClassifier(ImageClassifier):
         self.model.visual.output_tokens = True
 
         self.output_tokens = config.speaker.use_tokens
-        self.embed_dim = self.model.visual.output_dim
-        self.width = self.model.visual.proj.shape[0]
+        self.embed_dim = self.model.visual.output_dim # 768
+        self.width = self.model.visual.proj.shape[0] # self.model.visual.proj.shape = (1024, 768)
+        print(self.embed_dim, self.width)
 
     @classmethod
     def from_pretrained(cls, config: Config, workdir=c.workdir, device=c.device):
@@ -215,7 +224,100 @@ class HAMBiomedCLIP(ImageClassifier):
 
         return pd.DataFrame(results)
 
+@register_classifier(name="biomedvlp")
+class BiomedVLP(ImageClassifier):
+    def __init__(self, config: Config, device=c.device):
+        super().__init__(config, device)
 
+        # self.image_encoder = ImageInferenceEngine(
+        #     image_model=get_biovil_t_image_encoder(),
+        #     transform=create_chest_xray_transform_for_inference(
+        #         resize=512, center_crop_size=512
+        #     ),
+        # )
+        self.preprocess = create_chest_xray_transform_for_inference(
+            resize=512, center_crop_size=512
+        )
+        self.image_encoder = get_biovil_t_image_encoder()
+        self.text_encoder = get_bert_inference(BertEncoderType.BIOVIL_T_BERT)
+        self.to(device)
+        self.device = device
+        self.TASK = 'Lung Opacity'
+        self.embed_dim = 128
+        self.width = 128
+    
+
+
+    @classmethod
+    def from_pretrained(cls, config: Config, workdir=c.workdir, device=c.device):
+        model = cls(config, device=device)
+        model.eval()
+        return model
+    def encode_text(self, text):
+        self.text_encoder.to(self.device)
+        text_features = self.text_encoder.get_embeddings_from_prompt(text)
+        text_features = text_features / torch.linalg.norm(
+            text_features, dim=-1, keepdim=True
+        )
+        return text_features
+
+    def encode_image(self, image):
+        self.image_encoder.to(self.device)
+        results = self.image_encoder(image)
+        # img_embedding: (16, 768)
+        # patch_embeddings: (16,  512, 16, 16)
+        # projected_global_embedding: (16, 128)
+        # projected_patch_embeddings: (16, 128, 16, 16)
+        image_tokens = results.projected_patch_embeddings
+        image_features = results.projected_global_embedding
+        image_tokens = image_tokens.permute(0, 2, 3, 1).reshape(
+            image_tokens.shape[0], -1, self.width)
+        image_features = image_features / torch.linalg.norm(
+            image_features, dim=-1, keepdim=True
+        )
+        return image_features, image_tokens
+
+    def forward(self, image_path, text=None, text_features=None):
+        assert text is not None or text_features is not None
+
+        image_features, image_tokens = self.encode_image(image_path)
+
+        if text_features is None:
+            text_features = self.encode_text(text)
+
+        logits_per_image = image_features @ text_features.t()
+
+        return {
+            "image_features": image_features.float(),
+            "image_tokens": image_tokens.float(),
+            "text_features": text_features.float(),
+            "logits": logits_per_image.float(),
+        }
+
+    @torch.no_grad()
+    def predict(self, dataset):
+        self.eval()
+
+        dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+
+        classes = dataset.classes
+        class_prompts = [f"No signs of {self.TASK}", f"Findings suggesting {self.TASK}"]
+        text_features = self.encode_text(class_prompts)
+
+        results = {"label": [], "prediction": []}
+        for data in tqdm(dataloader):
+            image_path, label = data[0], data[1]
+
+            output = self(image_path, text_features=text_features)
+            logits = output["logits"]
+            prediction = torch.argmax(logits, dim=-1).cpu()
+
+            results["label"].extend(label.squeeze().tolist())
+            results["prediction"].extend(prediction.squeeze().tolist())
+
+        return pd.DataFrame(results)
+    
+    
 class MONET(nn.Module):
     templates = [
         "This is dermatoscopy of {}",

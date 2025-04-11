@@ -1,17 +1,17 @@
 from configs.utils import Config, register_config
 
 
-@register_config(name="cub")
-class CUBClaimConfig(Config):
+@register_config(name="chexpert")
+class CheXpertClaimConfig(Config):
     def __init__(self):
         super().__init__()
-        self.data.dataset = "cub"
-        self.data.classifier = "open_clip:ViT-L-14"
-        
+        self.data.dataset = "chexpert"
+        self.data.classifier = "BiomedVLP"
         self.data.explanation_length = 12
+        
 
         self.speaker.beta = 0.6
-        self.speaker.alpha = 0.0 # [0.0, 0.2]
+        self.speaker.alpha = 0.2 # [0.0, 0.2]
         self.speaker.k = 4
 
         self.speaker.width = 256

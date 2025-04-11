@@ -24,7 +24,8 @@ from train_utils import (
     initialize_optimizer,
 )
 
-device = C.device
+# device = 'C.device'
+device = 'cuda:1'
 monitor = Monitor()
 
 
@@ -169,6 +170,56 @@ def train_iteration(
     update_listener(
         prediction_dataset, explanation_dataset, listener, listener_optimizer
     )
+    
+@torch.no_grad()
+def evaluate_classifier(
+    dataset, prediction_dataset: PredictionDataset, classifier: nn.Module, device: torch.device
+):
+    classifier.eval()
+    samples = dataset.get_classes_and_samples()
+    Labels = [i[1] for i in samples[1]]
+    
+    dataloader = DataLoader(prediction_dataset, batch_size=16, shuffle=False)
+    Predictions = []
+    for _, data in enumerate(tqdm(dataloader)):
+        prediction = data["prediction"]
+        Predictions.extend(prediction.tolist())
+    # positive and negative ratios
+    positive_p = np.sum(np.array(Labels) == 1) 
+    negative_n = np.sum(np.array(Labels) == 0)
+    print(
+        f"Positive: {positive_p}, "
+        f"Negative: {negative_n}"
+    )
+    accuracy = np.sum(np.array(Labels) == np.array(Predictions)) / len(Labels)
+    print(f"Accuracy: {accuracy:.2f}")
+    # sensitivity and specificity
+    tp = np.sum(
+        np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 1)
+    )
+    tn = np.sum(
+        np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 0)
+    )
+    fp = np.sum(
+        np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 1)
+    )
+    fn = np.sum(
+        np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 0)
+    )
+    sensitivity = tp / (tp + fn) if tp + fn > 0 else 0
+
+    precision = tp / (tp + fp) if tp + fp > 0 else 0
+    f1_score = (
+        2 * precision * sensitivity / (precision + sensitivity)
+    )
+    specificity = tn / (tn + fp) if tn + fp > 0 else 0
+    print(f"F1 score: {f1_score:.2f}")
+    print(f"Sensitivity: {sensitivity:.2f}")
+    print(f"Specificity: {specificity:.2f}")
+    print(f"Precision: {precision:.2f}")
+    print(f"TP: {tp}, TN: {tn}, FP: {fp}, FN: {fn}")
+    print(f"TPR: {tp / (tp + fn):.2f}, TNR: {tn / (tn + fp):.2f}")
+        
 
 
 @torch.no_grad()
@@ -179,9 +230,9 @@ def evaluate(dataset: PredictionDataset, speaker: ClaimSpeaker, listener: Listen
 
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
     for _, data in enumerate(tqdm(dataloader)):
-        image_tokens = data["image_tokens"].to(device)
-        image_attribute = data["image_attribute"].to(device)
-        prediction = data["prediction"].to(device)
+        image_tokens = data["image_tokens"].to(device) # (batch_size, seq_len, dim) (16, 256, 1024)
+        image_attribute = data["image_attribute"].to(device) # (batch_size, num_attributes) (16, 312)
+        prediction = data["prediction"].to(device) # (batch_size) (16)
 
         explanation, explanation_logp = speaker.explain(image_tokens)
         consistency, action = listener.listen(image_attribute, explanation)
@@ -288,6 +339,15 @@ def main(args):
     )
     val_prediction_dataset = PredictionDataset(
         config, val_dataset, workdir=workdir, device=device
+    )
+    
+    print("Evaluating pretrained classifier (Training set)")
+    evaluate_classifier(
+        train_dataset, train_prediction_dataset, classifier, device=device
+    )
+    print("Evaluating pretrained classifier (Test set)")
+    evaluate_classifier(
+        val_dataset, val_prediction_dataset, classifier, device=device
     )
 
     run_name = config.run_name()
