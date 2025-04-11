@@ -3,10 +3,10 @@ name: sweep_all
 method: grid
 parameters:
   config:
-    value: "chexpert_claim"
+    value: "chexpert"
   alpha:
     values: [0.0, 0.2]
   gamma:
     values: [0.2, 0.4, 0.6]
   explanation_length:
-    values: [4, 8, 12]
+    values: [4, 8, 10, 12]

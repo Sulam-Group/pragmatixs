@@ -356,7 +356,7 @@ def main(args):
     print("Evaluating initialization...")
     evaluate(val_prediction_dataset, speaker, listener)
 
-    total_iterations = 50
+    total_iterations = 20
     for t in range(total_iterations):
         print(f"Iteration {t+1}")
         train_iteration(
