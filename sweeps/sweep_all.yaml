@@ -7,6 +7,11 @@ parameters:
   alpha:
     values: [0.0, 0.2]
   gamma:
-    values: [0.0, 0.2, 0.4]
+    values: [0.4]
   explanation_length:
-    values: [4, 8, 12]
+    values: [12]
+  preference:
+    values: ['doctor', 'patient', 'None']
+  temperature_scale:
+    values: [1, 2, 4]  
+  
