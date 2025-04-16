@@ -74,7 +74,7 @@ def get_dataset(
     root = os.path.join(workdir, "data")
     Dataset = datasets[dataset_name]
     return Dataset(
-        root, train=train, transform=transform, return_attribute=return_attribute
+        config, root, train=train, transform=transform, return_attribute=return_attribute
     )
 
 
@@ -82,6 +82,7 @@ def get_dataset(
 class CUB(DatasetWithAttributes):
     def __init__(
         self,
+        config, 
         root: str,
         train: bool = False,
         transform: T.Compose = None,
@@ -160,11 +161,11 @@ class CUB(DatasetWithAttributes):
 
         return claims, np.load(op_image_attribute_path)
 
-
 @register_dataset(name="chexpert")
 class CheXpert(DatasetWithAttributes):
     def __init__(
         self,
+        config,
         root: str,
         train: bool = False,
         transform: T.Compose = None,
@@ -173,7 +174,7 @@ class CheXpert(DatasetWithAttributes):
         super().__init__(
             root, train=train, transform=transform, return_attribute=return_attribute
         )
-        self.TASK = 'Lung Opacity'
+        self.TASK = config.data.task
         self.op = "train" if train else "val"
         if self.op == "train":
             self.info_df = pd.read_csv(
@@ -205,23 +206,110 @@ class CheXpert(DatasetWithAttributes):
 
     def get_claims_and_image_attributes(self):
         claims = [
-            'Enlarged Cardiomediastinum',
-            'Lung Opacity',
-            'Cardiomegaly',
-            'Lung Lesion',
-            'Edema',
-            'Consolidation',
-            'Pneumonia',
-            'Atelectasis',
-            'Pneumothorax',
-            'Pleural Effusion',
-            'Pleural Other',
-            'Fracture',
-            'Support Devices'
-        ]
+                'Enlarged Cardiomediastinum',
+                'Lung Opacity',
+                'Cardiomegaly',
+                'Lung Lesion',
+                'Edema',
+                'Consolidation',
+                'Pneumonia',
+                'Atelectasis',
+                'Pneumothorax',
+                'Pleural Effusion',
+                'Pleural Other',
+                'Fracture',
+                'Support Devices'
+            ]
         claims = [i for i in claims if i != self.TASK]
         image_attribute = self.info_df[claims].values
         return claims, image_attribute
+    
+    
+@register_dataset(name="chexpert_augmented")
+class CheXpertAg(DatasetWithAttributes):
+    def __init__(
+        self,
+        config,
+        root: str,
+        train: bool = False,
+        transform: T.Compose = None,
+        return_attribute: bool = False,
+    ):
+        super().__init__(
+            root, train=train, transform=transform, return_attribute=return_attribute
+        )
+        self.augmented_claim = {
+                'Enlarged Cardiomediastinum': 'Area around heart looks bigger than normal',
+                'Lung Opacity':'Cloudy spot in lung; could mean infection or fluid',
+                'Cardiomegaly': 'Heart looks bigger than normal',
+                'Lung Lesion': 'Abnormal spot found in the lung',
+                'Edema': 'Swelling caused by fluid buildup',
+                'Consolidation': 'Lung area filled with fluid, not air',
+                'Pneumonia': 'Lung infection causing fluid and inflammation',
+                'Atelectasis': 'Part of lung has collapsed or shrunk',
+                'Pneumothorax':'Air outside lung causes it to collapse',
+                'Pleural Effusion': 'Extra fluid between lung and chest wall',
+                'Pleural Other': 'Other changes near the lung lining',
+                'Fracture': 'A broken bone',
+                'Support Devices': 'Medical tools like tubes or wires in chest'
+        }
+        self.TASK = config.data.task
+        self.op = "train" if train else "val"
+        if self.op == "train":
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "train_visualCheXbert.csv"),
+                header=0,
+                index_col=0,
+            )
+        else:
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "val.csv"),
+                header=0,
+                index_col=0,
+            )
+        self.classes, self.samples = self.get_classes_and_samples()
+        self.claims, self.image_attribute = self.get_claims_and_image_attributes()
+
+    def get_classes_and_samples(self):
+        image_dir = os.path.join(self.root, "chexpert", self.op)
+        patient_ids = os.listdir(image_dir)
+        # only keep the patients with id < 10000 (for training)
+        if self.op == "train":
+            patient_ids = [i for i in patient_ids if int(i.removeprefix("patient")) < 10000]
+        image_paths = list(self.info_df.index)
+        image_paths = [os.path.join(image_dir, i.split('/')[2], '/'.join(i.split('/')[3:])) for i in image_paths if i.split('/')[2] in patient_ids]
+        labels = list(self.info_df[self.TASK])
+        classes = [f"No signs of {self.TASK}", f"Findings suggesting {self.TASK}"]
+        samples = [(image_path, label) for image_path, label in zip(image_paths, labels)]
+        return classes, samples
+
+    def get_claims_and_image_attributes(self):
+        claims = [
+                'Enlarged Cardiomediastinum',
+                'Lung Opacity',
+                'Cardiomegaly',
+                'Lung Lesion',
+                'Edema',
+                'Consolidation',
+                'Pneumonia',
+                'Atelectasis',
+                'Pneumothorax',
+                'Pleural Effusion',
+                'Pleural Other',
+                'Fracture',
+                'Support Devices'
+            ]
+        claims = [i for i in claims if i != self.TASK]
+        image_attribute = self.info_df[claims].values
+        claims = claims + [
+                self.augmented_claim[c] for c in claims
+            ]
+        image_attribute = np.concatenate(
+                [image_attribute, image_attribute], axis=1
+            )
+        return claims, image_attribute
+    
+
     
 
 @register_dataset(name="imagenette")
