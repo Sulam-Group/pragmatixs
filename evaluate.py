@@ -49,7 +49,10 @@ def evaluate(config: Config, workdir=C.workdir):
     )
 
     classes, claims = dataset.classes, dataset.claims
-    class_prompts = [f"A photo of a {c}" for c in classes]
+    if config.data.dataset != 'chexpert':
+        class_prompts = [f"A photo of a {c}" for c in classes]
+    else:
+        class_prompts = classes
 
     speaker = ClaimSpeaker.from_pretrained(
         config, classifier, claims, workdir=workdir, device=device

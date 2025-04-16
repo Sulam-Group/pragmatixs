@@ -25,6 +25,7 @@ from train_utils import (
 )
 
 device = C.device
+# device = 'cuda:1'
 monitor = Monitor()
 
 
@@ -36,6 +37,7 @@ def parse_args():
     parser.add_argument("--beta", type=float, default=None)
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--alpha", type=float, default=None)
+    parser.add_argument("--preference", type=str, default=None)
     parser.add_argument("--listener_k", type=int, default=None)
     parser.add_argument("--temperature_scale", type=float, default=None)
     parser.add_argument("--workdir", type=str, default=C.workdir)
@@ -283,7 +285,8 @@ def evaluate(dataset: PredictionDataset, speaker: ClaimSpeaker, listener: Listen
 
 
 def main(args):
-    config_name = args.config
+    # config_name = args.config
+    config_name = 'chexpert'
     explanation_length = args.explanation_length
     k = args.k
     beta = args.beta
@@ -291,6 +294,7 @@ def main(args):
     alpha = args.alpha
     listener_k = args.listener_k
     temperature_scale = args.temperature_scale
+    preference = args.preference
     workdir = args.workdir
 
     config = get_config(config_name)
@@ -308,6 +312,8 @@ def main(args):
         config.listener.k = listener_k
     if temperature_scale is not None:
         config.listener.temperature_scale = temperature_scale
+    if preference is not None:
+        config.listener.preference = preference
 
     classifier = get_classifier(
         config, from_pretrained=True, workdir=workdir, device=device

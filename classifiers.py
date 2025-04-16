@@ -242,7 +242,7 @@ class BiomedVLP(ImageClassifier):
         self.text_encoder = get_bert_inference(BertEncoderType.BIOVIL_T_BERT)
         self.to(device)
         self.device = device
-        self.TASK = 'Lung Opacity'
+        self.TASK = config.data.task
         self.embed_dim = 128
         self.width = 128
     
