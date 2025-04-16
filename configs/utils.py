@@ -38,6 +38,7 @@ class DataConfig(ConfigDict):
         self.dataset: str = config_dict.get("dataset", None)
         self.classifier: str = config_dict.get("classifier", None)
         self.explanation_length: int = config_dict.get("explanation_length", None)
+        self.task: str = config_dict.get("task", None)
 
 
 class SpeakerConfig(ConfigDict):
@@ -67,6 +68,7 @@ class ListenerConfig(ConfigDict):
         super().__init__()
 
         self.type: str = config_dict.get("type", None)
+        self.preference: str = config_dict.get("preference", None)
 
         self.width: int = config_dict.get("width", None)
         self.heads: int = config_dict.get("heads", None)

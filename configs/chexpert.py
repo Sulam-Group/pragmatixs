@@ -5,9 +5,10 @@ from configs.utils import Config, register_config
 class CheXpertClaimConfig(Config):
     def __init__(self):
         super().__init__()
-        self.data.dataset = "chexpert"
+        self.data.dataset = "chexpert_augmented"
         self.data.classifier = "BiomedVLP"
         self.data.explanation_length = 12
+        self.data.task = 'Lung Opacity'
         
 
         self.speaker.beta = 0.6
@@ -23,9 +24,14 @@ class CheXpertClaimConfig(Config):
         self.speaker.lr = 1e-04
         self.speaker.wd = 1e-02
 
-        self.listener.type = "claim"
-        # self.listener.type = "topic"
-        self.listener.prior = [0, 0, 1 / 3, 1 / 3, 1 / 3, 0]
+        self.listener.type = "topic"
+        self.listener.preference = "doctor"
+        if self.listener.preference == "doctor":
+            self.listener.prior = [1, 0]
+        elif self.listener.preference == "patient":
+            self.listener.prior = [0, 1]
+        elif self.listener.preference == "None":
+            self.listener.prior = [0.5, 0.5]
         self.listener.temperature_scale = 1.0 #[1.0, 2.0, 4.0, 8.0]
         self.listener.gamma = 0.4
         self.listener.k = 8
