@@ -4,7 +4,6 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchmetrics
 from torch.utils import model_zoo
 
 
@@ -30,7 +29,7 @@ class NetworkCUB(nn.Module):
         x = self.relu(self.norm1(self.layer1(x)))
         x = self.relu(self.norm2(self.layer2(x)))
 
-        if self.tau == None:
+        if self.tau is None:
             return self.classifier(x)
 
         else:
@@ -131,7 +130,7 @@ class Inception3(nn.Module):
         expand_dim: if not 0, add an additional fc layer with expand_dim neurons
         three_class: whether to count not visible as a separate class for predicting attribute
         """
-        super(Inception3, self).__init__()
+        super().__init__()
         self.aux_logits = aux_logits
         self.transform_input = transform_input
         self.n_attributes = n_attributes
@@ -278,7 +277,7 @@ class FC(nn.Module):
         """
         Extend standard Torch Linear layer to include the option of expanding into 2 Linear layers
         """
-        super(FC, self).__init__()
+        super().__init__()
         self.expand_dim = expand_dim
         if self.expand_dim > 0:
             self.relu = nn.ReLU()
@@ -301,7 +300,7 @@ class FC(nn.Module):
 
 class InceptionA(nn.Module):
     def __init__(self, in_channels, pool_features):
-        super(InceptionA, self).__init__()
+        super().__init__()
         self.branch1x1 = BasicConv2d(in_channels, 64, kernel_size=1)
 
         self.branch5x5_1 = BasicConv2d(in_channels, 48, kernel_size=1)
@@ -332,7 +331,7 @@ class InceptionA(nn.Module):
 
 class InceptionB(nn.Module):
     def __init__(self, in_channels):
-        super(InceptionB, self).__init__()
+        super().__init__()
         self.branch3x3 = BasicConv2d(in_channels, 384, kernel_size=3, stride=2)
 
         self.branch3x3dbl_1 = BasicConv2d(in_channels, 64, kernel_size=1)
@@ -354,7 +353,7 @@ class InceptionB(nn.Module):
 
 class InceptionC(nn.Module):
     def __init__(self, in_channels, channels_7x7):
-        super(InceptionC, self).__init__()
+        super().__init__()
         self.branch1x1 = BasicConv2d(in_channels, 192, kernel_size=1)
 
         c7 = channels_7x7
@@ -392,7 +391,7 @@ class InceptionC(nn.Module):
 
 class InceptionD(nn.Module):
     def __init__(self, in_channels):
-        super(InceptionD, self).__init__()
+        super().__init__()
         self.branch3x3_1 = BasicConv2d(in_channels, 192, kernel_size=1)
         self.branch3x3_2 = BasicConv2d(192, 320, kernel_size=3, stride=2)
 
@@ -417,7 +416,7 @@ class InceptionD(nn.Module):
 
 class InceptionE(nn.Module):
     def __init__(self, in_channels):
-        super(InceptionE, self).__init__()
+        super().__init__()
         self.branch1x1 = BasicConv2d(in_channels, 320, kernel_size=1)
 
         self.branch3x3_1 = BasicConv2d(in_channels, 384, kernel_size=1)
@@ -467,7 +466,7 @@ class InceptionAux(nn.Module):
         three_class=False,
         connect_CY=False,
     ):
-        super(InceptionAux, self).__init__()
+        super().__init__()
         self.conv0 = BasicConv2d(in_channels, 128, kernel_size=1)
         self.conv1 = BasicConv2d(128, 768, kernel_size=5)
         self.conv1.stddev = 0.01

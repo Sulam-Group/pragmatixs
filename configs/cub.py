@@ -10,7 +10,7 @@ class CUBClaimConfig(Config):
         self.data.explanation_length = 12
 
         self.speaker.beta = 0.6
-        self.speaker.alpha = [0.0, 0.2]
+        self.speaker.alpha = 0.2
         self.speaker.k = 4
 
         self.speaker.width = 256
@@ -22,8 +22,8 @@ class CUBClaimConfig(Config):
         self.speaker.lr = 1e-04
         self.speaker.wd = 1e-02
 
-        # self.listener.type = "claim"
-        self.listener.type = "topic"
+        self.listener.type = "claim"
+        # self.listener.type = "topic"
         self.listener.prior = [0, 0, 1 / 3, 1 / 3, 1 / 3, 0]
         self.listener.temperature_scale = [1.0, 2.0, 4.0, 8.0]
         self.listener.gamma = 0.4

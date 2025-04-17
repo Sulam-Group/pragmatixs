@@ -1,5 +1,4 @@
 import argparse
-import os
 
 import numpy as np
 import pandas as pd
@@ -132,7 +131,8 @@ def evaluate(config: Config, workdir=C.workdir):
 
 
 def main(args):
-    config_name = args.config
+    # config_name = args.config
+    config_name = "cub"
     workdir = args.workdir
 
     config = get_config(config_name)

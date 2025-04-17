@@ -15,7 +15,7 @@ with open(os.path.join(imagenet_dir, "wnids_to_class.txt")) as f:
     lines = f.readlines()
     wnids_to_class = {}
     for line in lines:
-        chunks = [c.strip() for c in line.split()]
+        chunks = [c.strip().replace(",", "") for c in line.split()]
         wnid = chunks[0]
         classes = chunks[1:]
         wnids_to_class[wnid] = classes

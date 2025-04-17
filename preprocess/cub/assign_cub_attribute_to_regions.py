@@ -7,17 +7,17 @@ root_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 data_dir = os.path.join(root_dir, "data")
 cub_dir = os.path.join(data_dir, "CUB")
 
-with open(os.path.join(cub_dir, "attributes", "attributes.txt"), "r") as f:
+with open(os.path.join(cub_dir, "attributes", "attributes.txt")) as f:
     lines = f.readlines()
     lines = [line.strip().split() for line in lines]
     attributes = [attribute for _, attribute in lines]
 
-with open(os.path.join(cub_dir, "classes.txt"), "r") as f:
+with open(os.path.join(cub_dir, "classes.txt")) as f:
     lines = f.readlines()
     lines = [line.strip().split() for line in lines]
     classes = [line[1].split(".")[1] for line in lines]
 
-with open(os.path.join(cub_dir, "class_regions.txt"), "r") as f:
+with open(os.path.join(cub_dir, "class_regions.txt")) as f:
     lines = f.readlines()
     lines = [line.strip().split() for line in lines]
     class_regions = np.array([int(region) for _, region in lines])

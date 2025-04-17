@@ -1,4 +1,4 @@
-from typing import Iterable
+from collections.abc import Iterable
 
 import numpy as np
 import torch
@@ -24,15 +24,15 @@ class ClaimSpeaker(nn.Module):
         self.context_length = context_length = config.data.explanation_length + 1
         self.claims = claims
 
-        vocab_size = len(claims) + 3
+        self.vocab_size = vocab_size = len(claims) + 3
         width = config.speaker.width
         heads = config.speaker.heads
         unimodal_layers = multimodal_layers = config.speaker.layers // 2
-        print(
-            f"Number of layers: {unimodal_layers} unimodal layers,"
-            f" {multimodal_layers} multimodal layers"
-        )
-        n_queries = config.data.explanation_length // 2
+        # print(
+        #     f"Number of layers: {unimodal_layers} unimodal layers,"
+        #     f" {multimodal_layers} multimodal layers"
+        # )
+        n_queries = config.speaker.n_queries or (config.data.explanation_length // 2)
         attn_pooler_heads = config.speaker.attn_pooler_heads
 
         self.bos_token_id = vocab_size - 3
@@ -145,7 +145,7 @@ class ClaimSpeaker(nn.Module):
         return torch.sum(explanation_logp, dim=-1)
 
     @torch.no_grad()
-    def explain(self, image_tokens):
+    def explain(self, image_tokens, length: torch.Tensor | None = None):
         m = image_tokens.size(0)
 
         binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
@@ -160,11 +160,11 @@ class ClaimSpeaker(nn.Module):
             claim_logits = self(image_tokens, claims)
             next_claim_logits = claim_logits[:, -1]
 
-            # set pad token to -inf to avoid generating it
+            # set special tokens to -inf to avoid generating
             next_claim_logits[:, self.bos_token_id] = float("-inf")
             next_claim_logits[:, self.pad_token_id] = float("-inf")
 
-            # # set eos token to -inf to avoid generating empty sequence
+            # set eos token to -inf to avoid generating empty sequence
             if claims.size(1) == 1:
                 next_claim_logits[:, self.eos_token_id] = float("-inf")
 
@@ -174,6 +174,9 @@ class ClaimSpeaker(nn.Module):
             # sample next claim
             next_claim_probs = torch.softmax(next_claim_logits, dim=-1)
             next_claim = torch.multinomial(next_claim_probs, 1)
+            if length is not None:
+                next_claim[claims.size(1) == length + 1] = self.eos_token_id
+
             next_claim_cls = torch.take_along_dim(binary_labels, next_claim, -1)
 
             next_claim_cls[next_claim == self.eos_token_id] = 0

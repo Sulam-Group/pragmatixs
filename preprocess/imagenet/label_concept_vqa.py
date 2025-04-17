@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Iterable
+from collections.abc import Iterable
 
 import clip
 import numpy as np
@@ -72,11 +72,13 @@ def main():
     model_clip.eval()
 
     train_dataset = ImageNet(data_dir, train=True, transform=preprocess)
-    test_dataset = ImageNet(data_dir, train=False, transform=preprocess)
+    val_dataset = ImageNet(data_dir, train=False, transform=preprocess)
 
-    with open(os.path.join(imagenet_dir, "attributes.txt"), "r") as f:
+    attribute_dir = os.path.join(imagenet_dir, "attributes")
+    with open(os.path.join(attribute_dir, "attributes.txt")) as f:
         lines = f.readlines()
         attributes = [line.strip() for line in lines]
+
     dictionary = get_dictionary(attributes, model_clip, device=device)
 
     model = ConceptNet2(embed_dims=512).to(device)
@@ -91,15 +93,13 @@ def main():
         train_dataset, model_clip, dictionary, model, device=device
     )
     np.save(
-        os.path.join(imagenet_dir, "train_image_attribute.npy"), train_image_attribute
+        os.path.join(attribute_dir, "train_image_attribute.npy"), train_image_attribute
     )
 
-    test_image_attribute = answer_query(
-        test_dataset, model_clip, dictionary, model, device=device
+    val_image_attribute = answer_query(
+        val_dataset, model_clip, dictionary, model, device=device
     )
-    np.save(
-        os.path.join(imagenet_dir, "test_image_attribute.npy"), test_image_attribute
-    )
+    np.save(os.path.join(attribute_dir, "val_image_attribute.npy"), val_image_attribute)
 
 
 if __name__ == "__main__":

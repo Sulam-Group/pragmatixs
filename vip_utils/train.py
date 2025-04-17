@@ -6,7 +6,7 @@ import torch.distributed as distributed
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 import wandb
@@ -96,7 +96,7 @@ def train(
         random_run_name = run_name.replace("biased", "random")
         random_weights_dir = os.path.join(workdir, "weights", random_run_name)
 
-        with open(os.path.join(random_weights_dir, "latest.txt"), "r") as f:
+        with open(os.path.join(random_weights_dir, "latest.txt")) as f:
             latest_weights = f.read().strip()
         state_dict = torch.load(
             os.path.join(random_weights_dir, latest_weights), map_location=device
