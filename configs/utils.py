@@ -1,8 +1,8 @@
 import os
-from copy import deepcopy
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import product
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any
 
 import pandas as pd
 import torch
@@ -32,16 +32,17 @@ def _set(dict, key, value):
 
 
 class DataConfig(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.dataset: str = config_dict.get("dataset", None)
         self.classifier: str = config_dict.get("classifier", None)
         self.explanation_length: int = config_dict.get("explanation_length", None)
+        self.distributed: bool = config_dict.get("distributed", False)
 
 
 class SpeakerConfig(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.width: int = config_dict.get("width", None)
@@ -63,7 +64,7 @@ class SpeakerConfig(ConfigDict):
 
 
 class ListenerConfig(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.type: str = config_dict.get("type", None)
@@ -99,7 +100,7 @@ class DistributionListenerConfig(ListenerConfig):
 
 
 class Config(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.data = DataConfig(config_dict.get("data", {}))
@@ -148,10 +149,15 @@ class Config(ConfigDict):
         os.makedirs(out_dir, exist_ok=True)
         return os.path.join(out_dir, f"{self.run_name()}")
 
+    def train_cache_dir(self, workdir=Constants.workdir):
+        train_cache_dir = os.path.join(workdir, "data", "train_cache", self.run_name())
+        os.makedirs(train_cache_dir, exist_ok=True)
+        return train_cache_dir
+
     def state_path(self, workdir=Constants.workdir):
         weight_dir = os.path.join(workdir, "weights", self.run_name())
         os.makedirs(weight_dir, exist_ok=True)
-        with open(os.path.join(weight_dir, "latest.txt"), "r") as f:
+        with open(os.path.join(weight_dir, "latest.txt")) as f:
             latest = f.read().strip()
         return os.path.join(weight_dir, latest)
 
@@ -160,7 +166,7 @@ class Config(ConfigDict):
         os.makedirs(results_dir, exist_ok=True)
         return os.path.join(results_dir, f"{self.run_name()}.pkl")
 
-    def get_results(self, workdir=Constants.workdir):
+    def get_results(self, workdir=Constants.workdir) -> pd.DataFrame:
         results_path = self.results_path(workdir=workdir)
         results = pd.read_pickle(results_path)
         results.set_index("idx", inplace=True)
@@ -196,7 +202,7 @@ def register_config(name: str):
 
 
 def get_config(
-    name: str, config_dict: Optional[Mapping[str, Any]] = {}
+    name: str, config_dict: Mapping[str, Any] | None = {}
 ) -> Config | Iterable[Config]:
     config: Config = configs[name]()
 

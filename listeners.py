@@ -1,6 +1,6 @@
 import os
 from abc import abstractmethod
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 import numpy as np
 import torch
@@ -191,7 +191,7 @@ class TopicListener(ClaimListener):
     @staticmethod
     def load_attribute_topic(workdir=C.workdir):
         attribute_dir = os.path.join(workdir, "data", "CUB", "attributes")
-        with open(os.path.join(attribute_dir, "attribute_topic.txt"), "r") as f:
+        with open(os.path.join(attribute_dir, "attribute_topic.txt")) as f:
             lines = f.readlines()
             lines = [line.strip().split() for line in lines]
             attribute_topic = [int(idx) for _, idx in lines]
@@ -221,7 +221,7 @@ class TopicListener(ClaimListener):
             * torch.log((explanation_topic + 1e-08) / (prior + 1e-08)),
             dim=-1,
         )
-        temperature = torch.clamp(self.temperature_scale * (kl + 1), 1.0)
+        temperature = self.temperature_scale * kl + 1
         return action / temperature[:, None]
 
 

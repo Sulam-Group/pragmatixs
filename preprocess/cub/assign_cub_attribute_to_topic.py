@@ -1,18 +1,16 @@
 import os
 
-import numpy as np
-
 root_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 data_dir = os.path.join(root_dir, "data")
 
 attribute_dir = os.path.join(data_dir, "CUB", "attributes")
 
-with open(os.path.join(attribute_dir, "attributes.txt"), "r") as f:
+with open(os.path.join(attribute_dir, "attributes.txt")) as f:
     lines = f.readlines()
     lines = [line.strip().split() for line in lines]
     attributes = [attribute for _, attribute in lines]
 
-with open(os.path.join(attribute_dir, "topics.txt"), "r") as f:
+with open(os.path.join(attribute_dir, "topics.txt")) as f:
     lines = f.readlines()
     lines = [line.strip().split() for line in lines]
     topic_to_idx = {topic: int(idx) for idx, topic in lines}

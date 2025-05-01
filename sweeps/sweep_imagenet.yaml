@@ -1,0 +1,19 @@
+program: train.py
+name: sweep_imagenet
+method: grid
+parameters:
+  config:
+    value: "imagenet"
+  alpha:
+    values: [0.0, 0.2]
+  # gamma:
+  #   values: [0.6, 0.8, 1.0]
+command:
+  - torchrun
+  - --nproc-per-node=3
+  - --nnodes=1
+  - --rdzv-backend=c10d
+  - --rdzv-endpoint=localhost:0
+  - ${program}
+  - ${args}
+  - --dist

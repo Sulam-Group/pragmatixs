@@ -1,8 +1,7 @@
 import os
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 import numpy as np
-import pandas as pd
 import torchvision.transforms as T
 from PIL import Image
 from torch.utils.data import Dataset
@@ -27,6 +26,7 @@ class DatasetWithAttributes(Dataset):
         self.transform = transform
         self.return_attribute = return_attribute
 
+        self.op = None
         self.classes: Iterable[str] = None
         self.claims: Iterable[str] = None
         self.samples = None
@@ -96,7 +96,7 @@ class CUB(DatasetWithAttributes):
     def get_classes_and_samples(self):
         image_dir = os.path.join(self.root, "CUB", "images")
 
-        with open(os.path.join(self.root, "CUB", f"{self.op}_filenames.txt"), "r") as f:
+        with open(os.path.join(self.root, "CUB", f"{self.op}_filenames.txt")) as f:
             op_filenames = f.readlines()
             op_filenames = [filename.strip() for filename in op_filenames]
 
@@ -123,7 +123,7 @@ class CUB(DatasetWithAttributes):
             self.root, "CUB", f"{self.op}_image_attribute.npy"
         )
         if not os.path.exists(op_image_attribute_path):
-            with open(os.path.join(self.root, "CUB", "images.txt"), "r") as f:
+            with open(os.path.join(self.root, "CUB", "images.txt")) as f:
                 lines = f.readlines()
                 lines = [line.strip().split() for line in lines]
                 filename_to_idx = {filename: int(idx) for idx, filename in lines}
@@ -134,9 +134,7 @@ class CUB(DatasetWithAttributes):
             }
 
             image_attribute = -1 * np.ones((len(self.samples), len(self.claims)))
-            with open(
-                os.path.join(attribute_dir, "image_attribute_labels.txt"), "r"
-            ) as f:
+            with open(os.path.join(attribute_dir, "image_attribute_labels.txt")) as f:
                 for line in tqdm(f):
                     chunks = line.strip().split()
                     if len(chunks) != 5:
@@ -159,21 +157,8 @@ class CUB(DatasetWithAttributes):
         return claims, np.load(op_image_attribute_path)
 
 
-@register_dataset(name="imagenette")
-class Imagenette(DatasetWithAttributes):
-    WNID_TO_CLASS = {
-        "n01440764": ("tench", "Tinca tinca"),
-        "n02102040": ("English springer", "English springer spaniel"),
-        "n02979186": ("cassette player",),
-        "n03000684": ("chainsaw", "chain saw"),
-        "n03028079": ("church", "church building"),
-        "n03394916": ("French horn", "horn"),
-        "n03417042": ("garbage truck", "dustcart"),
-        "n03425413": ("gas pump", "gasoline pump", "petrol pump", "island dispenser"),
-        "n03445777": ("golf ball",),
-        "n03888257": ("parachute", "chute"),
-    }
-
+@register_dataset(name="imagenet")
+class ImageNet(DatasetWithAttributes):
     def __init__(
         self,
         root: str,
@@ -184,13 +169,76 @@ class Imagenette(DatasetWithAttributes):
         super().__init__(
             root, train=train, transform=transform, return_attribute=return_attribute
         )
-        self.op = "train" if train else "test"
+        self.op = "train" if train else "val"
 
         self.classes, self.samples = self.get_classes_and_samples()
         self.claims, self.image_attribute = self.get_claims_and_image_attributes()
 
     def get_classes_and_samples(self):
-        image_root = os.path.join(self.root, "imagenette", self.op)
-        wnids, wnid_to_idx = find_classes(image_root)
-        classes = [self.WNID_TO_CLASS[wnid][0] for wnid in wnids]
-        samples = make_dataset(image_root, wnid_to_idx, extensions=".jpeg")
+        dataset_dir = os.path.join(self.root, "ImageNet")
+
+        # with open(os.path.join(dataset_dir, "imagenette_classes.txt")) as f:
+        #     lines = f.readlines()
+        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
+        #     lines += f.readlines()
+        # with open(os.path.join(dataset_dir, "wnids_to_class.txt")) as f:
+        #     lines = f.readlines()
+        with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
+            lines = f.readlines()
+
+        wnids_to_class = {}
+        for line in lines:
+            line = line.strip().replace(", ", ",")
+            chunks = line.split()
+            wnid, class_names = chunks[0], " ".join(chunks[1:])
+            class_name = class_names.split(",")[0]
+            wnids_to_class[wnid] = class_name
+
+        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
+        #     lines = f.readlines()
+        #     wnids_to_class = {}
+        #     for line in lines:
+        #         chunks = [c.strip().replace(",", "") for c in line.split()]
+        #         wnid = chunks[0]
+        #         classes = chunks[1:]
+        #         wnids_to_class[wnid] = classes
+
+        # with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
+        #     lines = f.readlines()
+        #     lines = [line.strip().split() for line in lines]
+        #     wnids = [wnid for wnid, _, _ in lines]
+        #     wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+        wnids = list(wnids_to_class.keys())
+        classes = list(wnids_to_class.values())
+        wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+        image_dir = os.path.join(dataset_dir, self.op)
+        samples = make_dataset(image_dir, wnid_to_idx, extensions=".jpeg")
+
+        samples_per_class = 200
+        class_samples = {k: [] for k, _ in enumerate(classes)}
+        for filename, class_idx in samples:
+            class_samples[class_idx].append((filename, class_idx))
+        class_samples = {k: v[:samples_per_class] for k, v in class_samples.items()}
+
+        samples = []
+        for class_idx, class_samples in class_samples.items():
+            samples.extend(class_samples)
+        return classes, samples
+
+    def get_claims_and_image_attributes(self):
+        attribute_dir = os.path.join(self.root, "ImageNet", "attributes")
+        with open(os.path.join(attribute_dir, "attributes.txt")) as f:
+            lines = f.readlines()
+            claims = [line.strip() for line in lines]
+
+        op_image_attribute_path = os.path.join(
+            attribute_dir, f"{self.op}_image_attribute.npy"
+        )
+        assert os.path.exists(op_image_attribute_path), (
+            f"Image attribute file {op_image_attribute_path} not found. "
+            "Make sure to run `preprocess/imagenet/label_concept_vqa.py` first, "
+            "or that the path is correct."
+        )
+        return claims, np.load(op_image_attribute_path)
