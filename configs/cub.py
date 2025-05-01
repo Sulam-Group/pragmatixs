@@ -7,10 +7,10 @@ class CUBClaimConfig(Config):
         super().__init__()
         self.data.dataset = "cub"
         self.data.classifier = "open_clip:ViT-L-14"
-        self.data.explanation_length = 12
+        self.data.explanation_length = 6
 
         self.speaker.beta = 0.6
-        self.speaker.alpha = 0.2
+        self.speaker.alpha = 0.21
         self.speaker.k = 4
 
         self.speaker.width = 256
@@ -25,7 +25,7 @@ class CUBClaimConfig(Config):
         self.listener.type = "claim"
         # self.listener.type = "topic"
         self.listener.prior = [0, 0, 1 / 3, 1 / 3, 1 / 3, 0]
-        self.listener.temperature_scale = [1.0, 2.0, 4.0, 8.0]
+        self.listener.temperature_scale = 4.0
         self.listener.gamma = 0.4
         self.listener.k = 8
 

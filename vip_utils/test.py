@@ -31,6 +31,7 @@ def test(
         "image_idx": np.arange(len(dataset)),
         "prediction": [],
         "logits": [],
+        "image_attribute": [],
         "queries": [],
     }
     for data in tqdm(dataloader):
@@ -39,7 +40,7 @@ def test(
         image = image.to(device)
 
         image_attribute = concept_net.net(image)
-        image_attribute = torch.where(image_attribute > 0.0, 1.0, -1.0)
+        image_attribute = torch.where(image_attribute > 0.0, 1.0, 0.0)
 
         mask = torch.zeros(image.size(0), len(dataset.claims), device=device)
         logits, queries = [], []
@@ -57,10 +58,14 @@ def test(
 
         results_data["prediction"].extend(prediction.tolist())
         results_data["logits"].extend(logits.cpu().tolist())
+        results_data["image_attribute"].extend(image_attribute.cpu().tolist())
         results_data["queries"].extend(queries.cpu().tolist())
 
+    results_dir = os.path.join(workdir, "results", config.data.dataset.lower())
+    os.makedirs(results_dir, exist_ok=True)
+
     run_name = get_run_name(config, max_queries, "biased")
-    results_path = os.path.join(workdir, "results", f"{run_name}.pkl")
+    results_path = os.path.join(results_dir, f"{run_name}.pkl")
 
     df = pd.DataFrame(results_data)
     df.to_pickle(results_path)

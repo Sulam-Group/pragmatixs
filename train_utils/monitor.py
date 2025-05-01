@@ -19,7 +19,7 @@ class Monitor:
         self.run_name = config.run_name()
 
         self.rank, self.world_size = 0, 1
-        if config.data.distributed:
+        if distributed.is_initialized():
             self.rank = distributed.get_rank()
             self.world_size = distributed.get_world_size()
 
@@ -47,10 +47,12 @@ class Monitor:
             self.global_samples += num_samples * self.world_size
 
         for k, v in data.items():
-            v = v.detach().sum().cpu().item()
+            v = v.detach().cpu()
+            nan = torch.isnan(v)
+            safe_v = v[~nan]
             if k not in self.data:
                 self.data[k] = []
-            self.data[k].append((v, num_samples))
+            self.data[k].append((safe_v.sum(), num_samples - nan.sum()))
 
     def log(self, prefix: str, step: int | None = None):
         data = {k: np.array(v) for k, v in self.data.items()}

@@ -176,26 +176,47 @@ class ImageNet(DatasetWithAttributes):
 
     def get_classes_and_samples(self):
         dataset_dir = os.path.join(self.root, "ImageNet")
-        with open(os.path.join(dataset_dir, "wnids_to_class.txt")) as f:
-            lines = f.readlines()
-            wnids_to_class = {}
-            for line in lines:
-                chunks = [c.strip().replace(",", "") for c in line.split()]
-                wnid = chunks[0]
-                classes = chunks[1:]
-                wnids_to_class[wnid] = classes
 
+        # with open(os.path.join(dataset_dir, "imagenette_classes.txt")) as f:
+        #     lines = f.readlines()
+        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
+        #     lines += f.readlines()
+        # with open(os.path.join(dataset_dir, "wnids_to_class.txt")) as f:
+        #     lines = f.readlines()
         with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
             lines = f.readlines()
-            lines = [line.strip().split() for line in lines]
-            wnids = [wnid for wnid, _, _ in lines]
-            wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+        wnids_to_class = {}
+        for line in lines:
+            line = line.strip().replace(", ", ",")
+            chunks = line.split()
+            wnid, class_names = chunks[0], " ".join(chunks[1:])
+            class_name = class_names.split(",")[0]
+            wnids_to_class[wnid] = class_name
+
+        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
+        #     lines = f.readlines()
+        #     wnids_to_class = {}
+        #     for line in lines:
+        #         chunks = [c.strip().replace(",", "") for c in line.split()]
+        #         wnid = chunks[0]
+        #         classes = chunks[1:]
+        #         wnids_to_class[wnid] = classes
+
+        # with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
+        #     lines = f.readlines()
+        #     lines = [line.strip().split() for line in lines]
+        #     wnids = [wnid for wnid, _, _ in lines]
+        #     wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+        wnids = list(wnids_to_class.keys())
+        classes = list(wnids_to_class.values())
+        wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
 
         image_dir = os.path.join(dataset_dir, self.op)
-        classes = [wnids_to_class[wnid][0] for wnid in wnids]
         samples = make_dataset(image_dir, wnid_to_idx, extensions=".jpeg")
 
-        samples_per_class = 500
+        samples_per_class = 200
         class_samples = {k: [] for k, _ in enumerate(classes)}
         for filename, class_idx in samples:
             class_samples[class_idx].append((filename, class_idx))

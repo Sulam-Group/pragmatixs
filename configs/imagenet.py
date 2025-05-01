@@ -10,14 +10,14 @@ class CUBClaimConfig(Config):
         self.data.explanation_length = 12
 
         self.speaker.beta = 0.6
-        self.speaker.alpha = 0.0
+        self.speaker.alpha = 0.2
         self.speaker.k = 4
 
-        self.speaker.width = 768
-        self.speaker.heads = 12
+        self.speaker.width = 256
+        self.speaker.heads = 4
         self.speaker.layers = 12
-        self.speaker.n_queries = 256
-        self.speaker.attn_pooler_heads = 8
+        self.speaker.n_queries = None
+        self.speaker.attn_pooler_heads = 4
 
         self.speaker.lr = 1e-04
         self.speaker.wd = 1e-02
@@ -29,8 +29,8 @@ class CUBClaimConfig(Config):
         self.listener.gamma = 0.4
         self.listener.k = 8
 
-        self.listener.width = 768
-        self.listener.heads = 12
+        self.listener.width = 256
+        self.listener.heads = 4
         self.listener.layers = 12
 
         self.listener.lr = 1e-04

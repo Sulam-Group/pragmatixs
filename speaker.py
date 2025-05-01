@@ -28,10 +28,6 @@ class ClaimSpeaker(nn.Module):
         width = config.speaker.width
         heads = config.speaker.heads
         unimodal_layers = multimodal_layers = config.speaker.layers // 2
-        # print(
-        #     f"Number of layers: {unimodal_layers} unimodal layers,"
-        #     f" {multimodal_layers} multimodal layers"
-        # )
         n_queries = config.speaker.n_queries or (config.data.explanation_length // 2)
         attn_pooler_heads = config.speaker.attn_pooler_heads
 
@@ -112,27 +108,25 @@ class ClaimSpeaker(nn.Module):
         text = self.text.transformer(text, attn_mask=attn_mask)
         return self.text.ln_final(text)
 
-    def forward(self, image_tokens, claims):
-        image_tokens = self.attn_pool_gen(image_tokens)
-        image_tokens = self.ln_attn_pool_gen(image_tokens)
-        explanation_tokens = self.encode_text(claims)
-        return self.decoder(image_tokens, explanation_tokens)
-
-    def explanation_logp(self, image_tokens, explanation):
+    def forward(self, image_tokens, explanation):
         claims = explanation[..., 0]
         claims_cls = explanation[..., 1]
 
         binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
-        binary_logits = torch.gather(binary_logits, -1, claims)
+
+        binary_logp = torch.gather(binary_logits, -1, claims)
         binary_logp = -torch.nn.functional.binary_cross_entropy_with_logits(
-            binary_logits, claims_cls.float(), reduction="none"
+            binary_logp, claims_cls.float(), reduction="none"
         )
         binary_logp[claims >= len(self.claims)] = 0
 
-        claim_logits = self(image_tokens, claims)
+        image_tokens = self.attn_pool_gen(image_tokens)
+        image_tokens = self.ln_attn_pool_gen(image_tokens)
+        explanation_tokens = self.encode_text(claims)
+        claim_logits = self.decoder(image_tokens, explanation_tokens)
+
         shift_logits = claim_logits[..., :-1, :].contiguous()
         shift_labels = claims[..., 1:].contiguous()
-
         claim_logp = -torch.nn.functional.cross_entropy(
             shift_logits.view(-1, shift_logits.size(-1)),
             shift_labels.view(-1),
@@ -142,22 +136,72 @@ class ClaimSpeaker(nn.Module):
         claim_logp = claim_logp.view_as(shift_labels)
 
         explanation_logp = binary_logp[:, 1:] + claim_logp
-        return torch.sum(explanation_logp, dim=-1)
+        explanation_logp = torch.sum(explanation_logp, dim=-1)
+
+        return {
+            "binary_logits": binary_logits,
+            "claim_logits": claim_logits,
+            "explanation_logp": explanation_logp,
+        }
+
+    # def forward(self, image_tokens, claims):
+    #     image_tokens = self.attn_pool_gen(image_tokens)
+    #     image_tokens = self.ln_attn_pool_gen(image_tokens)
+    #     explanation_tokens = self.encode_text(claims)
+    #     return self.decoder(image_tokens, explanation_tokens)
+
+    # def explanation_logp(self, image_tokens, explanation):
+    #     claims = explanation[..., 0]
+    #     claims_cls = explanation[..., 1]
+
+    #     binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
+    #     binary_logits = torch.gather(binary_logits, -1, claims)
+    #     binary_logp = -torch.nn.functional.binary_cross_entropy_with_logits(
+    #         binary_logits, claims_cls.float(), reduction="none"
+    #     )
+    #     binary_logp[claims >= len(self.claims)] = 0
+
+    #     claim_logits = self(image_tokens, claims)
+    #     shift_logits = claim_logits[..., :-1, :].contiguous()
+    #     shift_labels = claims[..., 1:].contiguous()
+
+    #     claim_logp = -torch.nn.functional.cross_entropy(
+    #         shift_logits.view(-1, shift_logits.size(-1)),
+    #         shift_labels.view(-1),
+    #         reduction="none",
+    #         ignore_index=self.pad_token_id,
+    #     )
+    #     claim_logp = claim_logp.view_as(shift_labels)
+
+    #     explanation_logp = binary_logp[:, 1:] + claim_logp
+    #     return torch.sum(explanation_logp, dim=-1)
 
     @torch.no_grad()
     def explain(self, image_tokens, length: torch.Tensor | None = None):
         m = image_tokens.size(0)
 
-        binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
-        binary_probs = torch.sigmoid(binary_logits)
-        binary_labels = torch.bernoulli(binary_probs)
+        # binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
+        # binary_probs = torch.sigmoid(binary_logits)
+        # binary_labels = torch.bernoulli(binary_probs)
 
-        claims = torch.tensor([[self.bos_token_id]] * m, device=image_tokens.device)
-        claims_cls = torch.zeros(m, 1, device=image_tokens.device)
+        explanation = torch.tensor(
+            [[[self.bos_token_id, 0]]] * m, device=image_tokens.device
+        ).long()
+        # claims = torch.tensor([[self.bos_token_id]] * m, device=image_tokens.device)
+        # claims_cls = torch.zeros(m, 1, device=image_tokens.device)
 
+        binary_labels = None
         finished = torch.zeros(m, dtype=torch.bool, device=image_tokens.device)
-        while claims.size(1) < self.context_length:
-            claim_logits = self(image_tokens, claims)
+        while explanation.size(1) < self.context_length:
+            claims = explanation[:, :, 0]
+
+            output = self(image_tokens, explanation)
+            if binary_labels is None:
+                binary_logits = output["binary_logits"]
+                binary_probs = torch.sigmoid(binary_logits)
+                binary_labels = torch.bernoulli(binary_probs).long()
+
+            claim_logits = output["claim_logits"]
             next_claim_logits = claim_logits[:, -1]
 
             # set special tokens to -inf to avoid generating
@@ -165,7 +209,7 @@ class ClaimSpeaker(nn.Module):
             next_claim_logits[:, self.pad_token_id] = float("-inf")
 
             # set eos token to -inf to avoid generating empty sequence
-            if claims.size(1) == 1:
+            if (claims.size(1) == 1) or (length is not None):
                 next_claim_logits[:, self.eos_token_id] = float("-inf")
 
             # set previous tokens to -inf to avoid repeating claims
@@ -178,16 +222,15 @@ class ClaimSpeaker(nn.Module):
                 next_claim[claims.size(1) == length + 1] = self.eos_token_id
 
             next_claim_cls = torch.take_along_dim(binary_labels, next_claim, -1)
-
             next_claim_cls[next_claim == self.eos_token_id] = 0
 
             finished += claims[:, -1] == self.eos_token_id
             next_claim[finished] = self.pad_token_id
             next_claim_cls[finished] = 0
 
-            claims = torch.cat([claims, next_claim], dim=-1)
-            claims_cls = torch.cat([claims_cls, next_claim_cls], dim=-1)
+            next = torch.stack([next_claim, next_claim_cls], dim=-1)
+            explanation = torch.cat([explanation, next], dim=1)
 
-        explanation = torch.stack([claims, claims_cls], dim=-1).long()
-        explanation_logp = self.explanation_logp(image_tokens, explanation)
+        output = self(image_tokens, explanation)
+        explanation_logp = output["explanation_logp"]
         return explanation, explanation_logp

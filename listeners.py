@@ -221,7 +221,7 @@ class TopicListener(ClaimListener):
             * torch.log((explanation_topic + 1e-08) / (prior + 1e-08)),
             dim=-1,
         )
-        temperature = torch.clamp(self.temperature_scale * (kl + 1), 1.0)
+        temperature = self.temperature_scale * kl + 1
         return action / temperature[:, None]
 
 

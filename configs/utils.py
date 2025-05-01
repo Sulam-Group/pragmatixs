@@ -166,7 +166,7 @@ class Config(ConfigDict):
         os.makedirs(results_dir, exist_ok=True)
         return os.path.join(results_dir, f"{self.run_name()}.pkl")
 
-    def get_results(self, workdir=Constants.workdir):
+    def get_results(self, workdir=Constants.workdir) -> pd.DataFrame:
         results_path = self.results_path(workdir=workdir)
         results = pd.read_pickle(results_path)
         results.set_index("idx", inplace=True)

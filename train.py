@@ -5,7 +5,7 @@ import torch
 import torch.distributed as distributed
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 from classifiers import get_classifier
@@ -33,6 +33,7 @@ logger = logging.getLogger("train")
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str)
+    parser.add_argument("--listener_type", type=str, default=None)
     parser.add_argument("--explanation_length", type=int, default=None)
     parser.add_argument("--k", type=int, default=None)
     parser.add_argument("--beta", type=float, default=None)
@@ -58,15 +59,18 @@ def update_speaker(
     speaker.train()
     monitor.zero()
 
-    explanation_perplexity = (
-        speaker.module.explanation_logp
-        if config.data.distributed
-        else speaker.explanation_logp
-    )
-
     beta = config.speaker.beta
 
-    dataloader = DataLoader(preference_dataset, batch_size=16, shuffle=True)
+    sampler, batch_size = None, 16
+    if distributed.is_initialized():
+        sampler = DistributedSampler(preference_dataset, shuffle=False)
+
+    dataloader = DataLoader(
+        preference_dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        shuffle=sampler is None,
+    )
     for i, data in enumerate(tqdm(dataloader)):
         image_tokens = data["image_tokens"].to(device)
         chosen = data["chosen"].to(device)
@@ -74,8 +78,12 @@ def update_speaker(
         ref_chosen_logp = data["chosen_logp"].to(device)
         ref_rejected_logp = data["rejected_logp"].to(device)
 
-        chosen_logp = explanation_perplexity(image_tokens, chosen)
-        rejected_logp = explanation_perplexity(image_tokens, rejected)
+        optimizer.zero_grad()
+        chosen_output = speaker(image_tokens, chosen)
+        rejected_output = speaker(image_tokens, rejected)
+
+        chosen_logp = chosen_output["explanation_logp"]
+        rejected_logp = rejected_output["explanation_logp"]
 
         logratios = chosen_logp - rejected_logp
         ref_logratios = ref_chosen_logp - ref_rejected_logp
@@ -112,7 +120,16 @@ def update_listener(
     listener.train()
     monitor.zero()
 
-    dataloader = DataLoader(explanation_dataset, batch_size=16, shuffle=True)
+    sampler, batch_size = None, 16
+    if distributed.is_initialized():
+        sampler = DistributedSampler(explanation_dataset, shuffle=False)
+
+    dataloader = DataLoader(
+        explanation_dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        shuffle=sampler is None,
+    )
     for i, data in enumerate(tqdm(dataloader)):
         prediction = data["prediction"].to(device)
         explanation = data["explanation"].to(device)
@@ -160,6 +177,9 @@ def train_iteration(
         workdir=workdir,
         device=device,
     )
+    if distributed.is_initialized():
+        distributed.barrier()
+
     preference_dataset = PreferenceDataset(
         config=config, prediction_dataset=prediction_dataset, workdir=workdir
     )
@@ -172,6 +192,8 @@ def train_iteration(
         monitor=monitor,
         device=device,
     )
+    if distributed.is_initialized():
+        distributed.barrier()
 
     generate_and_save_explanations(
         config=config,
@@ -181,6 +203,9 @@ def train_iteration(
         workdir=workdir,
         device=device,
     )
+    if distributed.is_initialized():
+        distributed.barrier()
+
     explanation_dataset = ExplanationDataset(
         config=config, prediction_dataset=prediction_dataset, workdir=workdir
     )
@@ -192,6 +217,8 @@ def train_iteration(
         monitor=monitor,
         device=device,
     )
+    if distributed.is_initialized():
+        distributed.barrier()
 
 
 @torch.no_grad()
@@ -240,10 +267,15 @@ def evaluate(
         target_cls = torch.gather(_image_attribute, -1, explanation_claims)
 
         claims_mask = explanation_claims < len(claims)
+        target_cls_mask = target_cls != -1
+
         explanation_length = torch.sum(claims_mask, dim=-1)
 
-        correct_claims = claims_mask * (explanation_claims_cls == target_cls)
-        explanation_accuracy = torch.sum(correct_claims, dim=-1) / explanation_length
+        accuracy_mask = claims_mask * target_cls_mask
+        correct_claims = accuracy_mask * (explanation_claims_cls == target_cls)
+        explanation_accuracy = torch.sum(correct_claims, dim=-1) / torch.sum(
+            accuracy_mask, dim=-1
+        )
 
         explanation_sentiment = (
             torch.sum(explanation_claims_cls, dim=-1) / explanation_length
@@ -270,6 +302,7 @@ def evaluate(
 
 def main(args):
     config_name = args.config
+    listener_type = args.listener_type
     explanation_length = args.explanation_length
     k = args.k
     beta = args.beta
@@ -282,6 +315,8 @@ def main(args):
 
     config = get_config(config_name)
     config.data.distributed = dist
+    if listener_type is not None:
+        config.listener.type = listener_type
     if explanation_length is not None:
         config.data.explanation_length = explanation_length
     if k is not None:
@@ -311,10 +346,18 @@ def main(args):
     )
 
     train_dataset = get_dataset(
-        config, train=True, transform=classifier.preprocess, return_attribute=True
+        config,
+        train=True,
+        transform=classifier.preprocess,
+        return_attribute=True,
+        workdir=workdir,
     )
     val_dataset = get_dataset(
-        config, train=False, transform=classifier.preprocess, return_attribute=True
+        config,
+        train=False,
+        transform=classifier.preprocess,
+        return_attribute=True,
+        workdir=workdir,
     )
 
     classes, claims = train_dataset.classes, train_dataset.claims
@@ -322,7 +365,9 @@ def main(args):
     Listener = get_listener(config.listener.type)
     listener = Listener(config, len(classes), claims, workdir=workdir, device=device)
     if dist:
-        speaker = nn.parallel.DistributedDataParallel(speaker, device_ids=[device])
+        speaker = nn.parallel.DistributedDataParallel(
+            speaker, device_ids=[device], find_unused_parameters=True
+        )
         listener = nn.parallel.DistributedDataParallel(listener, device_ids=[device])
 
     speaker_optimizer = initialize_optimizer(

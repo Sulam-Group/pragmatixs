@@ -4,12 +4,16 @@ from functools import wraps
 import torch
 import torch.distributed as distributed
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
+from torch.utils.data import (
+    DataLoader,
+    Dataset,
+    DistributedSampler,
+    RandomSampler,
+    SequentialSampler,
+)
 
 from configs import Config
 from configs import Constants as C
-
-batch_size = 16
 
 
 def get_rank():
@@ -51,24 +55,27 @@ def setup_logging():
 def get_loader_and_indices(
     config: Config = None,
     dataset: Dataset = None,
+    batch_size: int = 1,
     shuffle: bool = False,
+    seed: int = 0,
     epoch: int = 0,
 ):
-    dist = config.data.distributed
-    sampler = None
-    indices = list(range(len(dataset)))
-    if dist:
-        sampler = DistributedSampler(dataset, drop_last=True, shuffle=shuffle)
+    if config.data.distributed:
+        sampler = DistributedSampler(
+            dataset, drop_last=True, shuffle=shuffle, seed=seed
+        )
         sampler.set_epoch(epoch)
-        indices = list(sampler)
+    else:
+        if shuffle:
+            g = torch.Generator()
+            g.manual_seed(seed + epoch)
+            sampler = RandomSampler(dataset, generator=g)
+        else:
+            sampler = SequentialSampler(dataset)
+
     return (
-        DataLoader(
-            dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-            shuffle=shuffle if sampler is None else False,
-        ),
-        indices,
+        DataLoader(dataset, batch_size=batch_size, sampler=sampler),
+        list(sampler),
     )
 
 
@@ -97,6 +104,8 @@ def initialize_optimizer(model: nn.Module, lr: float, weight_decay: float):
     ]
     rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
 
+    if distributed.is_initialized():
+        lr = lr * distributed.get_world_size()
     return torch.optim.AdamW(
         [
             {"params": gain_or_bias_params, "weight_decay": 0.0},
