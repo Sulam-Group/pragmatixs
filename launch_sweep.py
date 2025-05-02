@@ -1,8 +1,6 @@
 import os
 import subprocess
 import argparse
-
-
 def run_agent_on_gpu(sweep_id, gpu_id):
     """Run wandb agent on a specific GPU."""
     env = os.environ.copy()
@@ -16,8 +14,6 @@ def run_agent_on_gpu(sweep_id, gpu_id):
         stdout=log_file,
         stderr=subprocess.STDOUT,
     )
-
-
 def main():
     parser = argparse.ArgumentParser(description="Launch W&B sweep on multiple GPUs.")
     parser.add_argument(
