@@ -1,7 +1,7 @@
 import base64
 import os
 from abc import abstractmethod
-from typing import Mapping
+from collections.abc import Mapping
 
 import clip
 import numpy as np

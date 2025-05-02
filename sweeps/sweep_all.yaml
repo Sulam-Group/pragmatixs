@@ -1,0 +1,12 @@
+program: train.py
+name: sweep_all_pragmatic
+method: grid
+parameters:
+  config:
+    value: "cub"
+  alpha:
+    value: 0.2
+  gamma:
+    values: [0.0, 0.2, 0.4, 0.6]
+  explanation_length:
+    values: [6, 12, 18, 24, 30]

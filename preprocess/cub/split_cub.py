@@ -10,7 +10,7 @@ data_dir = os.path.join(root_dir, "data")
 image_dir = os.path.join(data_dir, "CUB", "images")
 wnids, wnid_to_idx = find_classes(image_dir)
 
-with open(os.path.join(data_dir, "CUB", "images.txt"), "r") as f:
+with open(os.path.join(data_dir, "CUB", "images.txt")) as f:
     lines = f.readlines()
     lines = [line.strip().split() for line in lines]
     filename_to_idx = {filename: int(idx) for idx, filename in lines}

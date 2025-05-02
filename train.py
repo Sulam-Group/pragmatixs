@@ -1,14 +1,13 @@
 import argparse
-import os
+import logging
 
-import numpy as np
 import torch
+import torch.distributed as distributed
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
-import wandb
 from classifiers import get_classifier
 from configs import Config
 from configs import Constants as C
@@ -17,21 +16,25 @@ from datasets import get_dataset
 from listeners import Listener, get_listener
 from speaker import ClaimSpeaker
 from train_utils import (
+    CosineScheduler,
     ExplanationDataset,
     Monitor,
     PredictionDataset,
     PreferenceDataset,
+    generate_and_save_explanations,
+    generate_and_save_preferences,
     initialize_optimizer,
+    rank_zero_only,
+    setup_logging,
 )
 
-device = C.device
-# device = 'cuda:1'
-monitor = Monitor()
+logger = logging.getLogger("train")
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str)
+    parser.add_argument("--listener_type", type=str, default=None)
     parser.add_argument("--explanation_length", type=int, default=None)
     parser.add_argument("--k", type=int, default=None)
     parser.add_argument("--beta", type=float, default=None)
@@ -41,52 +44,63 @@ def parse_args():
     parser.add_argument("--listener_k", type=int, default=None)
     parser.add_argument("--temperature_scale", type=float, default=None)
     parser.add_argument("--workdir", type=str, default=C.workdir)
+    parser.add_argument("--dist", action="store_true", default=False)
     return parser.parse_args()
 
 
 def update_speaker(
-    config: Config,
-    prediction_dataset: PredictionDataset,
-    preference_dataset: PreferenceDataset,
-    speaker: ClaimSpeaker,
-    optimizer: torch.optim.Optimizer,
+    config: Config = None,
+    preference_dataset: PreferenceDataset = None,
+    speaker: ClaimSpeaker = None,
+    optimizer: torch.optim.Optimizer = None,
+    monitor: Monitor = None,
+    device=C.device,
 ):
+    logger.info("Updating speaker...")
+
     speaker.train()
     monitor.zero()
 
     beta = config.speaker.beta
 
-    dataloader = DataLoader(preference_dataset, batch_size=16, shuffle=True)
-    for i, data in enumerate(tqdm(dataloader)):
-        image_idx = data["image_idx"]
+    sampler, batch_size = None, config.training.batch_size
+    if distributed.is_initialized():
+        sampler = DistributedSampler(preference_dataset, shuffle=False)
 
-        image_tokens = torch.from_numpy(
-            np.stack(
-                [prediction_dataset[_idx]["image_tokens"] for _idx in image_idx], axis=0
-            )
-        ).to(device)
+    dataloader = DataLoader(
+        preference_dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        shuffle=sampler is None,
+    )
+    for i, data in enumerate(tqdm(dataloader)):
+        image_tokens = data["image_tokens"].to(device)
         chosen = data["chosen"].to(device)
         rejected = data["rejected"].to(device)
         ref_chosen_logp = data["chosen_logp"].to(device)
         ref_rejected_logp = data["rejected_logp"].to(device)
 
-        chosen_logp = speaker.explanation_logp(image_tokens, chosen)
-        rejected_logp = speaker.explanation_logp(image_tokens, rejected)
+        optimizer.zero_grad()
+        chosen_output = speaker(image_tokens, chosen)
+        rejected_output = speaker(image_tokens, rejected)
+
+        chosen_logp = chosen_output["explanation_logp"]
+        rejected_logp = rejected_output["explanation_logp"]
 
         logratios = chosen_logp - rejected_logp
         ref_logratios = ref_chosen_logp - ref_rejected_logp
         logits = logratios - ref_logratios
         loss = -F.logsigmoid(beta * logits).sum()
         loss.backward()
-        nn.utils.clip_grad_norm_(speaker.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(speaker.parameters(), config.training.max_grad_norm)
         optimizer.step()
 
         monitor.update(
             {
-                "chosen logp": chosen_logp.sum().cpu().item(),
-                "rejected logp": rejected_logp.sum().cpu().item(),
-                "logratios": logratios.sum().cpu().item(),
-                "speaker loss": loss.cpu().item(),
+                "chosen logp": chosen_logp,
+                "rejected logp": rejected_logp,
+                "logratios": logratios,
+                "speaker loss": loss,
             },
             num_samples=image_tokens.size(0),
         )
@@ -97,40 +111,44 @@ def update_speaker(
 
 
 def update_listener(
-    prediction_dataset: PredictionDataset,
-    explanation_dataset: ExplanationDataset,
-    listener: Listener,
-    optimizer: torch.optim.Optimizer,
+    config: Config = None,
+    explanation_dataset: ExplanationDataset = None,
+    listener: Listener = None,
+    optimizer: torch.optim.Optimizer = None,
+    monitor: Monitor = None,
+    device=C.device,
 ):
+    logger.info("Updating listener...")
+
     listener.train()
     monitor.zero()
 
-    dataloader = DataLoader(explanation_dataset, batch_size=16, shuffle=True)
-    for i, data in enumerate(tqdm(dataloader)):
-        image_idx = data["image_idx"]
+    sampler, batch_size = None, config.training.batch_size
+    if distributed.is_initialized():
+        sampler = DistributedSampler(explanation_dataset, shuffle=False)
 
+    dataloader = DataLoader(
+        explanation_dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        shuffle=sampler is None,
+    )
+    for i, data in enumerate(tqdm(dataloader)):
+        prediction = data["prediction"].to(device)
         explanation = data["explanation"].to(device)
-        prediction = torch.from_numpy(
-            np.stack(
-                [prediction_dataset[_idx]["prediction"] for _idx in image_idx], axis=0
-            )
-        ).to(device)
 
         optimizer.zero_grad()
         action = listener(explanation)
         loss = F.cross_entropy(action, prediction, reduction="sum")
         loss.backward()
-        nn.utils.clip_grad_norm_(listener.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(listener.parameters(), config.training.max_grad_norm)
         optimizer.step()
 
         listener_prediction = torch.argmax(action, dim=-1)
         correct = (listener_prediction == prediction).float()
 
         monitor.update(
-            {
-                "listener loss": loss.cpu().item(),
-                "listener accuracy": correct.sum().cpu().item(),
-            },
+            {"listener loss": loss, "listener accuracy": correct},
             num_samples=explanation.size(0),
         )
 
@@ -140,37 +158,87 @@ def update_listener(
 
 
 def train_iteration(
-    config: Config,
-    prediction_dataset: PredictionDataset,
-    speaker: ClaimSpeaker,
-    listener: Listener,
-    speaker_optimizer: torch.optim.Optimizer,
-    listener_optimizer: torch.optim.Optimizer,
+    config: Config = None,
+    prediction_dataset: PredictionDataset = None,
+    speaker: ClaimSpeaker = None,
+    listener: Listener = None,
+    speaker_optimizer: torch.optim.Optimizer = None,
+    listener_optimizer: torch.optim.Optimizer = None,
+    speaker_scheduler: CosineScheduler = None,
+    listener_scheduler: CosineScheduler = None,
+    epoch: int = 0,
+    monitor: Monitor = None,
+    workdir=C.workdir,
+    device=C.device,
 ):
-    print("Creating preference dataset...")
+    logger.info(f"Iteration {epoch+1}")
+
+    generate_and_save_preferences(
+        config=config,
+        prediction_dataset=prediction_dataset,
+        speaker=speaker,
+        listener=listener,
+        epoch=epoch,
+        workdir=workdir,
+        device=device,
+    )
+    if distributed.is_initialized():
+        distributed.barrier()
+
     preference_dataset = PreferenceDataset(
-        config, prediction_dataset, speaker, listener, device=device
-    )
-    print("Created preference dataset")
-    print(
-        f"\tNumber of preferences: {len(preference_dataset)}\n"
-        f"\tAverage chosen score: {preference_dataset.chosen_score.mean().item():.2f}"
+        config=config, prediction_dataset=prediction_dataset, workdir=workdir
     )
 
-    print("Updating speaker...")
     update_speaker(
-        config, prediction_dataset, preference_dataset, speaker, speaker_optimizer
+        config=config,
+        preference_dataset=preference_dataset,
+        speaker=speaker,
+        optimizer=speaker_optimizer,
+        monitor=monitor,
+        device=device,
     )
+    speaker_scheduler.step()
+    if distributed.is_initialized():
+        distributed.barrier()
 
-    print("Creating explanation dataset...")
+    generate_and_save_explanations(
+        config=config,
+        prediction_dataset=prediction_dataset,
+        speaker=speaker,
+        epoch=epoch,
+        workdir=workdir,
+        device=device,
+    )
+    listener_scheduler.step()
+    if distributed.is_initialized():
+        distributed.barrier()
+
     explanation_dataset = ExplanationDataset(
-        config, prediction_dataset, speaker, device=device
+        config=config, prediction_dataset=prediction_dataset, workdir=workdir
     )
 
-    print("Updating listener...")
     update_listener(
-        prediction_dataset, explanation_dataset, listener, listener_optimizer
+        config=config,
+        explanation_dataset=explanation_dataset,
+        listener=listener,
+        optimizer=listener_optimizer,
+        monitor=monitor,
+        device=device,
     )
+    if distributed.is_initialized():
+        distributed.barrier()
+
+    rank = 0
+    if distributed.is_initialized():
+        rank = distributed.get_rank()
+    if rank == 0:
+        monitor.logger.log(
+            {
+                "train/speaker_lr": speaker_optimizer.param_groups[0]["lr"],
+                "train/listener_lr": listener_optimizer.param_groups[0]["lr"],
+            },
+            step=monitor.global_samples,
+        )
     
 @torch.no_grad()
 def evaluate_classifier(
@@ -224,58 +292,78 @@ def evaluate_classifier(
 
 
 @torch.no_grad()
-def evaluate(dataset: PredictionDataset, speaker: ClaimSpeaker, listener: Listener):
+@rank_zero_only
+def evaluate(
+    config: Config = None,
+    dataset: PredictionDataset = None,
+    speaker: ClaimSpeaker = None,
+    listener: Listener = None,
+    monitor: Monitor = None,
+    device=C.device,
+):
+    logger.info("Evaluating...")
+
     speaker.eval()
     listener.eval()
     monitor.zero()
 
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+    dist = config.data.distributed
+    explain = speaker.module.explain if dist else speaker.explain
+    listen = listener.module.listen if dist else listener.listen
+    speaker_claims = speaker.module.claims if dist else speaker.claims
+    listener_claims = listener.module.claims if dist else listener.claims
+    assert speaker_claims == listener_claims
+    claims = speaker_claims
+
+    dataloader = DataLoader(
+        dataset, batch_size=config.training.batch_size, shuffle=False
+    )
     for _, data in enumerate(tqdm(dataloader)):
         image_tokens = data["image_tokens"].to(device) # (batch_size, seq_len, dim) (16, 256, 1024)
         image_attribute = data["image_attribute"].to(device) # (batch_size, num_attributes) (16, 312)
         prediction = data["prediction"].to(device) # (batch_size) (16)
 
-        explanation, explanation_logp = speaker.explain(image_tokens)
-        consistency, action = listener.listen(image_attribute, explanation)
+        explanation, explanation_logp = explain(image_tokens)
+        consistency, action = listen(image_attribute, explanation)
 
-        claims = explanation[..., 0]
-        claims_cls = explanation[..., 1]
+        explanation_claims = explanation[..., 0]
+        explanation_claims_cls = explanation[..., 1]
 
         _image_attribute = torch.cat(
             [
                 image_attribute,
-                torch.zeros(
-                    image_attribute.size(0),
-                    listener.speaker_vocab_size - len(listener.claims),
-                    device=image_attribute.device,
-                ),
+                torch.zeros(image_attribute.size(0), 3, device=device),
             ],
             dim=-1,
         )
-        target_cls = torch.gather(_image_attribute, -1, claims)
+        target_cls = torch.gather(_image_attribute, -1, explanation_claims)
 
-        claims_mask = claims < len(listener.claims)
-        correct = claims_mask * (claims_cls == target_cls)
-        accuracy = torch.sum(correct, dim=-1) / torch.sum(claims_mask, dim=-1)
+        claims_mask = explanation_claims < len(claims)
+        target_cls_mask = target_cls != -1
+
+        explanation_length = torch.sum(claims_mask, dim=-1)
+
+        accuracy_mask = claims_mask * target_cls_mask
+        correct_claims = accuracy_mask * (explanation_claims_cls == target_cls)
+        explanation_accuracy = torch.sum(correct_claims, dim=-1) / torch.sum(
+            accuracy_mask, dim=-1
+        )
+
+        explanation_sentiment = (
+            torch.sum(explanation_claims_cls, dim=-1) / explanation_length
+        )
 
         listener_prediction = torch.argmax(action, dim=-1)
-        correct = (listener_prediction == prediction).float()
-
-        explanation_length = torch.sum(
-            explanation[..., 0] < len(speaker.claims), dim=-1
-        )
-        explanation_sentiment = (
-            torch.sum(explanation[..., 1], dim=-1) / explanation_length
-        )
+        listener_correct = (listener_prediction == prediction).float()
 
         monitor.update(
             {
-                "explanation accuracy": accuracy.sum().cpu().item(),
-                "explanation consistency": consistency.sum().cpu().item(),
-                "explanation logp": explanation_logp.sum().cpu().item(),
-                "explanation length": explanation_length.sum().cpu().item(),
-                "explanation sentiment": explanation_sentiment.sum().cpu().item(),
-                "listener accuracy": correct.sum().cpu().item(),
+                "explanation accuracy": explanation_accuracy,
+                "explanation consistency": consistency,
+                "explanation logp": explanation_logp,
+                "explanation length": explanation_length,
+                "explanation sentiment": explanation_sentiment,
+                "listener accuracy": listener_correct,
             },
             num_samples=image_tokens.size(0),
             increase_global_samples=False,
@@ -286,6 +374,7 @@ def evaluate(dataset: PredictionDataset, speaker: ClaimSpeaker, listener: Listen
 
 def main(args):
     config_name = args.config
+    listener_type = args.listener_type
     explanation_length = args.explanation_length
     k = args.k
     beta = args.beta
@@ -295,8 +384,12 @@ def main(args):
     temperature_scale = args.temperature_scale
     preference = args.preference
     workdir = args.workdir
+    dist = args.dist
 
     config = get_config(config_name)
+    config.data.distributed = dist
+    if listener_type is not None:
+        config.listener.type = listener_type
     if explanation_length is not None:
         config.data.explanation_length = explanation_length
     if k is not None:
@@ -311,91 +404,117 @@ def main(args):
         config.listener.k = listener_k
     if temperature_scale is not None:
         config.listener.temperature_scale = temperature_scale
-    if preference is not None:
-        config.listener.preference = preference
-    if config.listener.preference == "doctor":
-        config.listener.prior = [1, 0]
-    elif config.listener.preference == "patient":
-        config.listener.prior = [0, 1]
+
+    rank = 0
+    if dist:
+        distributed.init_process_group(backend="nccl")
+        rank = distributed.get_rank()
+        device = torch.device(f"cuda:{rank}")
+        torch.cuda.set_device(device)
+    else:
+        device = C.device
 
     classifier = get_classifier(
         config, from_pretrained=True, workdir=workdir, device=device
     )
 
     train_dataset = get_dataset(
-        config, train=True, transform=classifier.preprocess, return_attribute=True
+        config,
+        train=True,
+        transform=classifier.preprocess,
+        return_attribute=True,
+        workdir=workdir,
     )
     val_dataset = get_dataset(
-        config, train=False, transform=classifier.preprocess, return_attribute=True
+        config,
+        train=False,
+        transform=classifier.preprocess,
+        return_attribute=True,
+        workdir=workdir,
     )
 
     classes, claims = train_dataset.classes, train_dataset.claims
     speaker = ClaimSpeaker(config, classifier, claims, device=device)
     Listener = get_listener(config.listener.type)
     listener = Listener(config, len(classes), claims, workdir=workdir, device=device)
+    if dist:
+        speaker = nn.parallel.DistributedDataParallel(
+            speaker, device_ids=[device], find_unused_parameters=True
+        )
+        listener = nn.parallel.DistributedDataParallel(listener, device_ids=[device])
 
     speaker_optimizer = initialize_optimizer(
-        speaker, config.speaker.lr, config.speaker.wd
+        speaker, config.training.max_lr, config.training.wd
     )
-    listener_optimizer = initialize_optimizer(
-        listener, config.listener.lr, config.listener.wd
+    speaker_scheduler = CosineScheduler(
+        optimizer=speaker_optimizer,
+        total_steps=config.training.iterations,
+        min_lr=config.training.min_lr,
+        max_lr=config.training.max_lr,
     )
 
-    print("Creating prediction datasets")
+    listener_optimizer = initialize_optimizer(
+        listener, config.training.max_lr, config.training.wd
+    )
+    listener_scheduler = CosineScheduler(
+        optimizer=listener_optimizer,
+        total_steps=config.training.iterations,
+        min_lr=config.training.min_lr,
+        max_lr=config.training.max_lr,
+    )
+
     train_prediction_dataset = PredictionDataset(
         config, train_dataset, workdir=workdir, device=device
     )
     val_prediction_dataset = PredictionDataset(
         config, val_dataset, workdir=workdir, device=device
     )
-    
-    # print("Evaluating pretrained classifier (Training set)")
-    # evaluate_classifier(
-    #     train_dataset, train_prediction_dataset, classifier, device=device
-    # )
-    # print("Evaluating pretrained classifier (Test set)")
-    # evaluate_classifier(
-    #     val_dataset, val_prediction_dataset, classifier, device=device
-    # )
 
-    run_name = config.run_name()
-    wandb.init(project="pragmatics", name=run_name, config=config.to_dict())
+    # train_prediction_dataset = Subset(train_prediction_dataset, range(1000))
+    # val_prediction_dataset = Subset(val_prediction_dataset, range(100))
 
-    print("Evaluating initialization...")
-    evaluate(val_prediction_dataset, speaker, listener)
+    monitor = Monitor(config)
+    evaluate(
+        config=config,
+        dataset=val_prediction_dataset,
+        speaker=speaker,
+        listener=listener,
+        monitor=monitor,
+        device=device,
+    )
 
-    total_iterations = 20
+    total_iterations = config.training.iterations
     for t in range(total_iterations):
-        print(f"Iteration {t+1}")
         train_iteration(
-            config,
-            train_prediction_dataset,
-            speaker,
-            listener,
-            speaker_optimizer,
-            listener_optimizer,
+            config=config,
+            prediction_dataset=train_prediction_dataset,
+            speaker=speaker,
+            listener=listener,
+            speaker_optimizer=speaker_optimizer,
+            listener_optimizer=listener_optimizer,
+            speaker_scheduler=speaker_scheduler,
+            listener_scheduler=listener_scheduler,
+            epoch=t,
+            monitor=monitor,
+            device=device,
         )
 
-        print("Evaluating speaker...")
-        evaluate(val_prediction_dataset, speaker, listener)
+        evaluate(
+            config=config,
+            dataset=val_prediction_dataset,
+            speaker=speaker,
+            listener=listener,
+            monitor=monitor,
+            device=device,
+        )
 
-        weights_dir = os.path.join(workdir, "weights", run_name)
-        os.makedirs(weights_dir, exist_ok=True)
+        if (t + 1) % 10 == 0:
+            monitor.save(speaker=speaker, listener=listener, epoch=t, workdir=workdir)
 
-        if (t + 1) % 5 == 0:
-            torch.save(
-                {"speaker": speaker.state_dict(), "listener": listener.state_dict()},
-                os.path.join(weights_dir, f"iteration_{t+1}.pt"),
-            )
-            with open(os.path.join(weights_dir, "latest.txt"), "w") as f:
-                f.write(f"iteration_{t+1}.pt")
-        torch.save(
-                {"speaker": speaker.state_dict(), "listener": listener.state_dict()},
-                os.path.join(weights_dir, f"iteration_final.pt"),
-            )
-     
+    monitor.save(speaker=speaker, listener=listener, epoch=t, workdir=workdir)
 
 
 if __name__ == "__main__":
+    setup_logging()
     args = parse_args()
     main(args)

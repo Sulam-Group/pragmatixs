@@ -1,7 +1,5 @@
 import argparse
-import os
 
-import wandb
 from configs import Constants as C
 from configs import get_config
 from vip_utils.test import test

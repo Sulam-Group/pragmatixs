@@ -1,6 +1,6 @@
 import os
 from abc import abstractmethod
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 import numpy as np
 import torch
@@ -225,8 +225,8 @@ class TopicListener(ClaimListener):
             explanation_topic
             * torch.log((explanation_topic + 1e-08) / (prior + 1e-08)),
             dim=-1,
-        ) # KL divergence of the empirical distribution and the prior distribution
-        temperature = torch.clamp(self.temperature_scale * (kl + 1), 1.0)
+        )
+        temperature = self.temperature_scale * kl + 1
         return action / temperature[:, None]
 
 
