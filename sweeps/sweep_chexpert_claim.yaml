@@ -1,0 +1,16 @@
+program: train.py
+name: sweep_all
+method: grid
+parameters:
+  config:
+    value: "chexpert_claim"
+  alpha:
+    values: [0.2, 0.0]
+  gamma:
+    values: [0.4]
+  explanation_length:
+    values: [12]
+  temperature_scale:
+    values: [1]  
+
+  
