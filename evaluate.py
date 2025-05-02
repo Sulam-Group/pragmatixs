@@ -30,6 +30,7 @@ def register_cls_attention_hook(listener: Listener):
     cls_attn_weights = []
 
     def _hook(module, input, output):
+        # print("Hook output:", type(output), output)
         cls_attn_weights.append(output[1][:, -1])
 
     for resblock in listener.text.transformer.resblocks:
@@ -49,10 +50,11 @@ def evaluate(config: Config, workdir=C.workdir):
     )
 
     classes, claims = dataset.classes, dataset.claims
-    if config.data.dataset != 'chexpert':
-        class_prompts = [f"A photo of a {c}" for c in classes]
-    else:
+    if config.data.dataset.startswith('chexpert'):
         class_prompts = classes
+        
+    else:
+        class_prompts = [f"A photo of a {c}" for c in classes]
 
     speaker = ClaimSpeaker.from_pretrained(
         config, classifier, claims, workdir=workdir, device=device
@@ -116,6 +118,7 @@ def evaluate(config: Config, workdir=C.workdir):
         action = action.squeeze().cpu().numpy()
 
         global cls_attn_weights
+        # cls_attn_weights a list of tensors [batch_size, n_cls] 12 x 16 x 6
         _cls_attn_weights = torch.stack(cls_attn_weights, dim=1)
         _cls_attn_weights = torch.mean(_cls_attn_weights, dim=1)
         _cls_attn_weights = _cls_attn_weights.cpu().numpy()
@@ -136,6 +139,7 @@ def evaluate(config: Config, workdir=C.workdir):
 
 def main(args):
     config_name = args.config
+    # config_name = 'chexpert_'
     workdir = args.workdir
 
     config = get_config(config_name)
