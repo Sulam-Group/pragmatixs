@@ -16,6 +16,7 @@ from datasets import get_dataset
 from listeners import Listener, get_listener
 from speaker import ClaimSpeaker
 from train_utils import (
+    CosineScheduler,
     ExplanationDataset,
     Monitor,
     PredictionDataset,
@@ -61,7 +62,7 @@ def update_speaker(
 
     beta = config.speaker.beta
 
-    sampler, batch_size = None, 16
+    sampler, batch_size = None, config.training.batch_size
     if distributed.is_initialized():
         sampler = DistributedSampler(preference_dataset, shuffle=False)
 
@@ -90,7 +91,7 @@ def update_speaker(
         logits = logratios - ref_logratios
         loss = -F.logsigmoid(beta * logits).sum()
         loss.backward()
-        nn.utils.clip_grad_norm_(speaker.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(speaker.parameters(), config.training.max_grad_norm)
         optimizer.step()
 
         monitor.update(
@@ -109,6 +110,7 @@ def update_speaker(
 
 
 def update_listener(
+    config: Config = None,
     explanation_dataset: ExplanationDataset = None,
     listener: Listener = None,
     optimizer: torch.optim.Optimizer = None,
@@ -120,7 +122,7 @@ def update_listener(
     listener.train()
     monitor.zero()
 
-    sampler, batch_size = None, 16
+    sampler, batch_size = None, config.training.batch_size
     if distributed.is_initialized():
         sampler = DistributedSampler(explanation_dataset, shuffle=False)
 
@@ -138,7 +140,7 @@ def update_listener(
         action = listener(explanation)
         loss = F.cross_entropy(action, prediction, reduction="sum")
         loss.backward()
-        nn.utils.clip_grad_norm_(listener.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(listener.parameters(), config.training.max_grad_norm)
         optimizer.step()
 
         listener_prediction = torch.argmax(action, dim=-1)
@@ -161,6 +163,8 @@ def train_iteration(
     listener: Listener = None,
     speaker_optimizer: torch.optim.Optimizer = None,
     listener_optimizer: torch.optim.Optimizer = None,
+    speaker_scheduler: CosineScheduler = None,
+    listener_scheduler: CosineScheduler = None,
     epoch: int = 0,
     monitor: Monitor = None,
     workdir=C.workdir,
@@ -192,6 +196,7 @@ def train_iteration(
         monitor=monitor,
         device=device,
     )
+    speaker_scheduler.step()
     if distributed.is_initialized():
         distributed.barrier()
 
@@ -203,6 +208,7 @@ def train_iteration(
         workdir=workdir,
         device=device,
     )
+    listener_scheduler.step()
     if distributed.is_initialized():
         distributed.barrier()
 
@@ -211,6 +217,7 @@ def train_iteration(
     )
 
     update_listener(
+        config=config,
         explanation_dataset=explanation_dataset,
         listener=listener,
         optimizer=listener_optimizer,
@@ -219,6 +226,18 @@ def train_iteration(
     )
     if distributed.is_initialized():
         distributed.barrier()
+
+    rank = 0
+    if distributed.is_initialized():
+        rank = distributed.get_rank()
+    if rank == 0:
+        monitor.logger.log(
+            {
+                "train/speaker_lr": speaker_optimizer.param_groups[0]["lr"],
+                "train/listener_lr": listener_optimizer.param_groups[0]["lr"],
+            },
+            step=monitor.global_samples,
+        )
 
 
 @torch.no_grad()
@@ -245,7 +264,9 @@ def evaluate(
     assert speaker_claims == listener_claims
     claims = speaker_claims
 
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+    dataloader = DataLoader(
+        dataset, batch_size=config.training.batch_size, shuffle=False
+    )
     for _, data in enumerate(tqdm(dataloader)):
         image_tokens = data["image_tokens"].to(device)
         image_attribute = data["image_attribute"].to(device)
@@ -371,10 +392,23 @@ def main(args):
         listener = nn.parallel.DistributedDataParallel(listener, device_ids=[device])
 
     speaker_optimizer = initialize_optimizer(
-        speaker, config.speaker.lr, config.speaker.wd
+        speaker, config.training.max_lr, config.training.wd
     )
+    speaker_scheduler = CosineScheduler(
+        optimizer=speaker_optimizer,
+        total_steps=config.training.iterations,
+        min_lr=config.training.min_lr,
+        max_lr=config.training.max_lr,
+    )
+
     listener_optimizer = initialize_optimizer(
-        listener, config.listener.lr, config.listener.wd
+        listener, config.training.max_lr, config.training.wd
+    )
+    listener_scheduler = CosineScheduler(
+        optimizer=listener_optimizer,
+        total_steps=config.training.iterations,
+        min_lr=config.training.min_lr,
+        max_lr=config.training.max_lr,
     )
 
     train_prediction_dataset = PredictionDataset(
@@ -397,7 +431,7 @@ def main(args):
         device=device,
     )
 
-    total_iterations = 50
+    total_iterations = config.training.iterations
     for t in range(total_iterations):
         train_iteration(
             config=config,
@@ -406,6 +440,8 @@ def main(args):
             listener=listener,
             speaker_optimizer=speaker_optimizer,
             listener_optimizer=listener_optimizer,
+            speaker_scheduler=speaker_scheduler,
+            listener_scheduler=listener_scheduler,
             epoch=t,
             monitor=monitor,
             device=device,

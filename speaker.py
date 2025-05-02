@@ -108,11 +108,14 @@ class ClaimSpeaker(nn.Module):
         text = self.text.transformer(text, attn_mask=attn_mask)
         return self.text.ln_final(text)
 
-    def forward(self, image_tokens, explanation):
+    def forward(
+        self, image_tokens, explanation, binary_logits=None, gen_image_tokens=None
+    ):
         claims = explanation[..., 0]
         claims_cls = explanation[..., 1]
 
-        binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
+        if binary_logits is None:
+            binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
 
         binary_logp = torch.gather(binary_logits, -1, claims)
         binary_logp = -torch.nn.functional.binary_cross_entropy_with_logits(
@@ -120,10 +123,12 @@ class ClaimSpeaker(nn.Module):
         )
         binary_logp[claims >= len(self.claims)] = 0
 
-        image_tokens = self.attn_pool_gen(image_tokens)
-        image_tokens = self.ln_attn_pool_gen(image_tokens)
+        if gen_image_tokens is None:
+            gen_image_tokens = self.attn_pool_gen(image_tokens)
+            gen_image_tokens = self.ln_attn_pool_gen(gen_image_tokens)
+
         explanation_tokens = self.encode_text(claims)
-        claim_logits = self.decoder(image_tokens, explanation_tokens)
+        claim_logits = self.decoder(gen_image_tokens, explanation_tokens)
 
         shift_logits = claim_logits[..., :-1, :].contiguous()
         shift_labels = claims[..., 1:].contiguous()
@@ -139,65 +144,37 @@ class ClaimSpeaker(nn.Module):
         explanation_logp = torch.sum(explanation_logp, dim=-1)
 
         return {
+            "gen_image_tokens": gen_image_tokens,
             "binary_logits": binary_logits,
             "claim_logits": claim_logits,
             "explanation_logp": explanation_logp,
         }
 
-    # def forward(self, image_tokens, claims):
-    #     image_tokens = self.attn_pool_gen(image_tokens)
-    #     image_tokens = self.ln_attn_pool_gen(image_tokens)
-    #     explanation_tokens = self.encode_text(claims)
-    #     return self.decoder(image_tokens, explanation_tokens)
-
-    # def explanation_logp(self, image_tokens, explanation):
-    #     claims = explanation[..., 0]
-    #     claims_cls = explanation[..., 1]
-
-    #     binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
-    #     binary_logits = torch.gather(binary_logits, -1, claims)
-    #     binary_logp = -torch.nn.functional.binary_cross_entropy_with_logits(
-    #         binary_logits, claims_cls.float(), reduction="none"
-    #     )
-    #     binary_logp[claims >= len(self.claims)] = 0
-
-    #     claim_logits = self(image_tokens, claims)
-    #     shift_logits = claim_logits[..., :-1, :].contiguous()
-    #     shift_labels = claims[..., 1:].contiguous()
-
-    #     claim_logp = -torch.nn.functional.cross_entropy(
-    #         shift_logits.view(-1, shift_logits.size(-1)),
-    #         shift_labels.view(-1),
-    #         reduction="none",
-    #         ignore_index=self.pad_token_id,
-    #     )
-    #     claim_logp = claim_logp.view_as(shift_labels)
-
-    #     explanation_logp = binary_logp[:, 1:] + claim_logp
-    #     return torch.sum(explanation_logp, dim=-1)
-
     @torch.no_grad()
     def explain(self, image_tokens, length: torch.Tensor | None = None):
         m = image_tokens.size(0)
 
-        # binary_logits = self.logit_scale.exp() * self.attn_pool_cls(image_tokens)
-        # binary_probs = torch.sigmoid(binary_logits)
-        # binary_labels = torch.bernoulli(binary_probs)
-
         explanation = torch.tensor(
             [[[self.bos_token_id, 0]]] * m, device=image_tokens.device
         ).long()
-        # claims = torch.tensor([[self.bos_token_id]] * m, device=image_tokens.device)
-        # claims_cls = torch.zeros(m, 1, device=image_tokens.device)
 
-        binary_labels = None
         finished = torch.zeros(m, dtype=torch.bool, device=image_tokens.device)
+        binary_logits, gen_image_tokens, binary_labels = None, None, None
         while explanation.size(1) < self.context_length:
             claims = explanation[:, :, 0]
 
-            output = self(image_tokens, explanation)
-            if binary_labels is None:
+            output = self(
+                image_tokens,
+                explanation,
+                binary_logits=binary_logits,
+                gen_image_tokens=gen_image_tokens,
+            )
+
+            if gen_image_tokens is None:
+                gen_image_tokens = output["gen_image_tokens"]
+            if binary_logits is None:
                 binary_logits = output["binary_logits"]
+            if binary_labels is None:
                 binary_probs = torch.sigmoid(binary_logits)
                 binary_labels = torch.bernoulli(binary_probs).long()
 

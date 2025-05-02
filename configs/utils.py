@@ -59,9 +59,6 @@ class SpeakerConfig(ConfigDict):
         self.alpha: float = config_dict.get("alpha", None)
         self.k: int = config_dict.get("k", None)
 
-        self.lr: float = config_dict.get("lr", None)
-        self.wd: float = config_dict.get("wd", None)
-
 
 class ListenerConfig(ConfigDict):
     def __init__(self, config_dict: Mapping[str, Any] | None = {}):
@@ -75,9 +72,6 @@ class ListenerConfig(ConfigDict):
 
         self.gamma: float = config_dict.get("gamma", None)
         self.k: int = config_dict.get("k", None)
-
-        self.lr: float = config_dict.get("lr", None)
-        self.wd: float = config_dict.get("wd", None)
 
         # distributional listener config
         self.prior: Mapping[str, float] = config_dict.get("prior", None)
@@ -99,6 +93,18 @@ class DistributionListenerConfig(ListenerConfig):
         self.temperature_scale: float = kwargs.get("temperature_scale", None)
 
 
+class TrainingConfig(ConfigDict):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
+        super().__init__()
+
+        self.iterations: int = config_dict.get("iterations", None)
+        self.batch_size: int = config_dict.get("batch_size", None)
+        self.min_lr: float = config_dict.get("min_lr", None)
+        self.max_lr: float = config_dict.get("max_lr", None)
+        self.wd: float = config_dict.get("wd", None)
+        self.max_grad_norm: float = config_dict.get("max_grad_norm", None)
+
+
 class Config(ConfigDict):
     def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
@@ -106,16 +112,7 @@ class Config(ConfigDict):
         self.data = DataConfig(config_dict.get("data", {}))
         self.speaker = SpeakerConfig(config_dict.get("speaker", {}))
         self.listener = ListenerConfig(config_dict.get("listener", {}))
-
-        # listener_type = config.get("listener", {}).get("type", "none")
-        # if listener_type == "claim":
-        #     self.listener = ListenerConfig(**kwargs.get("listener", {}))
-        # elif listener_type == "topic":
-        #     self.listener = TopicListenerConfig(**kwargs.get("listener", {}))
-        # elif listener_type == "distribution":
-        #     self.listener = DistributionListenerConfig(**kwargs.get("listener", {}))
-        # else:
-        #     raise ValueError(f"Unknown listener type {listener_type}")
+        self.training = TrainingConfig(config_dict.get("training", {}))
 
     def classifier_name(self):
         return (
