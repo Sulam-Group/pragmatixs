@@ -285,8 +285,7 @@ def evaluate(dataset: PredictionDataset, speaker: ClaimSpeaker, listener: Listen
 
 
 def main(args):
-    # config_name = args.config
-    config_name = 'chexpert'
+    config_name = args.config
     explanation_length = args.explanation_length
     k = args.k
     beta = args.beta
@@ -314,6 +313,10 @@ def main(args):
         config.listener.temperature_scale = temperature_scale
     if preference is not None:
         config.listener.preference = preference
+    if config.listener.preference == "doctor":
+        config.listener.prior = [1, 0]
+    elif config.listener.preference == "patient":
+        config.listener.prior = [0, 1]
 
     classifier = get_classifier(
         config, from_pretrained=True, workdir=workdir, device=device
@@ -379,13 +382,18 @@ def main(args):
         weights_dir = os.path.join(workdir, "weights", run_name)
         os.makedirs(weights_dir, exist_ok=True)
 
-        if (t + 1) % 10 == 0:
+        if (t + 1) % 5 == 0:
             torch.save(
                 {"speaker": speaker.state_dict(), "listener": listener.state_dict()},
                 os.path.join(weights_dir, f"iteration_{t+1}.pt"),
             )
             with open(os.path.join(weights_dir, "latest.txt"), "w") as f:
                 f.write(f"iteration_{t+1}.pt")
+        torch.save(
+                {"speaker": speaker.state_dict(), "listener": listener.state_dict()},
+                os.path.join(weights_dir, f"iteration_final.pt"),
+            )
+     
 
 
 if __name__ == "__main__":
