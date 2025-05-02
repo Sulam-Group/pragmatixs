@@ -1,4 +1,5 @@
 import logging
+import math
 from functools import wraps
 
 import torch
@@ -113,3 +114,28 @@ def initialize_optimizer(model: nn.Module, lr: float, weight_decay: float):
         ],
         lr=lr,
     )
+
+
+class CosineScheduler:
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer = None,
+        total_steps: int = None,
+        min_lr: float = None,
+        max_lr: float = None,
+    ):
+        self.optimizer = optimizer
+        self.total_steps = total_steps
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+
+        self._step = 0
+
+    def step(self):
+        self._step += 1
+        self._step = min(self._step, self.total_steps)
+        lr = self.min_lr + 1 / 2 * (self.max_lr - self.min_lr) * (
+            1 + math.cos(math.pi * self._step / self.total_steps)
+        )
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = lr

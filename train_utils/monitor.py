@@ -17,6 +17,7 @@ class Monitor:
     def __init__(self, config: Config):
         self.config = config
         self.run_name = config.run_name()
+        self.logger = wandb
 
         self.rank, self.world_size = 0, 1
         if distributed.is_initialized():
@@ -58,7 +59,7 @@ class Monitor:
         data = {k: np.array(v) for k, v in self.data.items()}
         data = {k: np.sum(v[:, 0]) / sum(v[:, 1]) for k, v in data.items()}
         if self.rank == 0:
-            wandb.log(
+            self.logger.log(
                 {f"{prefix}/{k}": v for k, v in data.items()},
                 step=step or self.global_samples,
             )
