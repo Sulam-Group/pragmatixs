@@ -60,8 +60,10 @@ def load_concept_net(workdir=C.workdir, device=C.device):
 def load_vip(
     config: Config, max_queries: int, tau: float, workdir=C.workdir, device=C.device
 ):
-    run_name = get_run_name(config, max_queries, "biased")
-    weights_dir = os.path.join(workdir, "weights", run_name)
+    run_name = get_run_name(config, max_queries, "random")
+    weights_dir = os.path.join(
+        workdir, "weights", config.data.dataset.lower(), run_name
+    )
 
     concept_net = load_concept_net(workdir=workdir, device=device)
 

@@ -62,7 +62,9 @@ def train(
     workdir=C.workdir,
 ):
     run_name = get_run_name(config, max_queries, sampling)
-    weights_dir = os.path.join(workdir, "weights", run_name)
+    weights_dir = os.path.join(
+        workdir, "weights", config.data.dataset.lower(), run_name
+    )
     os.makedirs(weights_dir, exist_ok=True)
 
     rank = 0

@@ -53,8 +53,8 @@ def main(args):
     os.makedirs(results_dir, exist_ok=True)
 
     classifier_safe = config.data.classifier.lower().replace(":", "_").replace("/", "_")
-    results_path = os.path.join(results_dir, f"{classifier_safe}.csv")
-    results.to_csv(results_path)
+    results_path = os.path.join(results_dir, f"{classifier_safe}.pkl")
+    results.to_pickle(results_path)
 
 
 if __name__ == "__main__":

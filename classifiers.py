@@ -138,7 +138,7 @@ class OpenClipClassifier(ImageClassifier):
         class_prompts = [f"A photo of a {class_name}" for class_name in classes]
         text_features = self.encode_text(class_prompts)
 
-        results = {"label": [], "prediction": []}
+        results = {"label": [], "prediction": [], "logits": []}
         for data in tqdm(dataloader):
             image, label = data[0], data[1]
 
@@ -150,6 +150,7 @@ class OpenClipClassifier(ImageClassifier):
 
             results["label"].extend(label.squeeze().tolist())
             results["prediction"].extend(prediction.squeeze().tolist())
+            results["logits"].extend(logits.squeeze().cpu().tolist())
 
         return pd.DataFrame(results)
 

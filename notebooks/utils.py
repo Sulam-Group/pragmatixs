@@ -46,7 +46,9 @@ def viz_explanation(dataset, results, idx, ax):
         )
         for claim, cls in explanation
     ]
-    explanation_claims = explanation_claims
+
+    explanation_claims = explanation_claims[1:]
+    cls_attn_weights = cls_attn_weights[1:]
 
     y = list(map(str, range(len(explanation_claims))))
     sns.barplot(x=cls_attn_weights, y=y, ax=ax)

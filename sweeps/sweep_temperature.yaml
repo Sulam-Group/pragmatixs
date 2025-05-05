@@ -4,7 +4,11 @@ method: grid
 parameters:
   config:
     value: "cub"
+  listener_type:
+    value: "topic"
+  explanation_length:
+    value: 6
   alpha:
-    values: [0.0, 0.2]
+    value: 0.2
   temperature_scale:
-    values: [1.0, 2.0, 4.0, 8.0]
+    values: [4.0, 1.0, 2.0, 8.0]

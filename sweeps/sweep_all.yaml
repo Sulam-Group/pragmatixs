@@ -4,9 +4,11 @@ method: grid
 parameters:
   config:
     value: "cub"
+  listener_type:
+    value: "claim"
   alpha:
     value: 0.2
   gamma:
-    values: [0.0, 0.2, 0.4, 0.6]
+    values: [0.0, 0.4, 0.8]
   explanation_length:
     values: [6, 12, 18, 24, 30]
