@@ -65,7 +65,7 @@ def load_vip(
 
     concept_net = load_concept_net(workdir=workdir, device=device)
 
-    with open(os.path.join(weights_dir, "latest.txt"), "r") as f:
+    with open(os.path.join(weights_dir, "latest.txt")) as f:
         latest = f.read().strip()
     state_dict = torch.load(os.path.join(weights_dir, latest), map_location=device)
 

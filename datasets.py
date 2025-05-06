@@ -1,8 +1,8 @@
 import os
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
-import numpy as np
 import pandas as pd
+import numpy as np
 import torchvision.transforms as T
 from PIL import Image
 from torch.utils.data import Dataset
@@ -27,6 +27,7 @@ class DatasetWithAttributes(Dataset):
         self.transform = transform
         self.return_attribute = return_attribute
 
+        self.op = None
         self.classes: Iterable[str] = None
         self.claims: Iterable[str] = None
         self.samples = None
@@ -37,7 +38,9 @@ class DatasetWithAttributes(Dataset):
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
-        image = Image.open(path).convert("RGB")
+        image = Image.open(path)
+        # if ":
+        #     image = image.convert("RGB")
 
         if self.transform is not None:
             image = self.transform(image)
@@ -72,7 +75,7 @@ def get_dataset(
     root = os.path.join(workdir, "data")
     Dataset = datasets[dataset_name]
     return Dataset(
-        root, train=train, transform=transform, return_attribute=return_attribute
+        config, root, train=train, transform=transform, return_attribute=return_attribute
     )
 
 
@@ -80,6 +83,7 @@ def get_dataset(
 class CUB(DatasetWithAttributes):
     def __init__(
         self,
+        config, 
         root: str,
         train: bool = False,
         transform: T.Compose = None,
@@ -96,7 +100,7 @@ class CUB(DatasetWithAttributes):
     def get_classes_and_samples(self):
         image_dir = os.path.join(self.root, "CUB", "images")
 
-        with open(os.path.join(self.root, "CUB", f"{self.op}_filenames.txt"), "r") as f:
+        with open(os.path.join(self.root, "CUB", f"{self.op}_filenames.txt")) as f:
             op_filenames = f.readlines()
             op_filenames = [filename.strip() for filename in op_filenames]
 
@@ -123,7 +127,7 @@ class CUB(DatasetWithAttributes):
             self.root, "CUB", f"{self.op}_image_attribute.npy"
         )
         if not os.path.exists(op_image_attribute_path):
-            with open(os.path.join(self.root, "CUB", "images.txt"), "r") as f:
+            with open(os.path.join(self.root, "CUB", "images.txt")) as f:
                 lines = f.readlines()
                 lines = [line.strip().split() for line in lines]
                 filename_to_idx = {filename: int(idx) for idx, filename in lines}
@@ -134,9 +138,7 @@ class CUB(DatasetWithAttributes):
             }
 
             image_attribute = -1 * np.ones((len(self.samples), len(self.claims)))
-            with open(
-                os.path.join(attribute_dir, "image_attribute_labels.txt"), "r"
-            ) as f:
+            with open(os.path.join(attribute_dir, "image_attribute_labels.txt")) as f:
                 for line in tqdm(f):
                     chunks = line.strip().split()
                     if len(chunks) != 5:
@@ -158,22 +160,251 @@ class CUB(DatasetWithAttributes):
 
         return claims, np.load(op_image_attribute_path)
 
+@register_dataset(name="chexpert")
+class CheXpert(DatasetWithAttributes):
+    def __init__(
+        self,
+        config,
+        root: str,
+        train: bool = False,
+        transform: T.Compose = None,
+        return_attribute: bool = False,
+    ):
+        super().__init__(
+            root, train=train, transform=transform, return_attribute=return_attribute
+        )
+        self.TASK = config.data.task
+        self.op = "train" if train else "val"
+        if self.op == "train":
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "train_visualCheXbert.csv"),
+                header=0,
+                index_col=0,
+            )
+        else:
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "val.csv"),
+                header=0,
+                index_col=0,
+            )
+        self.classes, self.samples = self.get_classes_and_samples()
+        self.claims, self.image_attribute = self.get_claims_and_image_attributes()
 
-@register_dataset(name="imagenette")
-class Imagenette(DatasetWithAttributes):
-    WNID_TO_CLASS = {
-        "n01440764": ("tench", "Tinca tinca"),
-        "n02102040": ("English springer", "English springer spaniel"),
-        "n02979186": ("cassette player",),
-        "n03000684": ("chainsaw", "chain saw"),
-        "n03028079": ("church", "church building"),
-        "n03394916": ("French horn", "horn"),
-        "n03417042": ("garbage truck", "dustcart"),
-        "n03425413": ("gas pump", "gasoline pump", "petrol pump", "island dispenser"),
-        "n03445777": ("golf ball",),
-        "n03888257": ("parachute", "chute"),
-    }
+    def get_classes_and_samples(self):
+        image_dir = os.path.join(self.root, "chexpert", self.op)
+        patient_ids = os.listdir(image_dir)
+        # only keep the patients with id < 10000 (for training)
+        if self.op == "train":
+            patient_ids = [i for i in patient_ids if int(i.removeprefix("patient")) < 10000]
+        image_paths = list(self.info_df.index)
+        image_paths = [os.path.join(image_dir, i.split('/')[2], '/'.join(i.split('/')[3:])) for i in image_paths if i.split('/')[2] in patient_ids]
+        indices = [i for i in self.info_df.index if i.split('/')[2] in patient_ids]
+        self.info_df = self.info_df.loc[indices]
+        
+        labels = list(self.info_df[self.TASK])
+        classes = [f"No signs of {self.TASK}", f"Findings suggesting {self.TASK}"]
+        samples = [(image_path, label) for image_path, label in zip(image_paths, labels)]
+        return classes, samples
 
+    def get_claims_and_image_attributes(self):
+        claims = [
+                'Enlarged Cardiomediastinum',
+                'Lung Opacity',
+                'Cardiomegaly',
+                'Lung Lesion',
+                'Edema',
+                'Consolidation',
+                'Pneumonia',
+                'Atelectasis',
+                'Pneumothorax',
+                'Pleural Effusion',
+                'Pleural Other',
+                'Fracture',
+                'Support Devices'
+            ]
+        claims = [i for i in claims if i != self.TASK]
+        image_attribute = self.info_df[claims].values
+        return claims, image_attribute
+    
+    
+@register_dataset(name="chexpert_augmented")
+class CheXpertAg(DatasetWithAttributes):
+    def __init__(
+        self,
+        config,
+        root: str,
+        train: bool = False,
+        transform: T.Compose = None,
+        return_attribute: bool = False,
+    ):
+        super().__init__(
+            root, train=train, transform=transform, return_attribute=return_attribute
+        )
+        self.augmented_claim = {
+                'Enlarged Cardiomediastinum': 'Area around heart looks bigger than normal',
+                'Lung Opacity':'Cloudy spot in lung; could mean infection or fluid',
+                'Cardiomegaly': 'Heart looks bigger than normal',
+                'Lung Lesion': 'Abnormal spot found in the lung',
+                'Edema': 'Swelling caused by fluid buildup',
+                'Consolidation': 'Lung area filled with fluid, not air',
+                'Pneumonia': 'Lung infection causing fluid and inflammation',
+                'Atelectasis': 'Part of lung has collapsed or shrunk',
+                'Pneumothorax':'Air outside lung causes it to collapse',
+                'Pleural Effusion': 'Extra fluid between lung and chest wall',
+                'Pleural Other': 'Other changes near the lung lining',
+                'Fracture': 'A broken bone',
+                'Support Devices': 'Medical tools like tubes or wires in chest'
+        }
+        self.TASK = config.data.task
+        self.op = "train" if train else "val"
+        if self.op == "train":
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "train_visualCheXbert.csv"),
+                header=0,
+                index_col=0,
+            )
+        else:
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "val.csv"),
+                header=0,
+                index_col=0,
+            )
+        self.classes, self.samples = self.get_classes_and_samples()
+        self.claims, self.image_attribute = self.get_claims_and_image_attributes()
+
+    def get_classes_and_samples(self):
+        image_dir = os.path.join(self.root, "chexpert", self.op)
+        patient_ids = os.listdir(image_dir)
+        # only keep the patients with id < 10000 (for training)
+        if self.op == "train":
+            patient_ids = [i for i in patient_ids if int(i.removeprefix("patient")) < 10000]
+        image_paths = list(self.info_df.index)
+        image_paths = [os.path.join(image_dir, i.split('/')[2], '/'.join(i.split('/')[3:])) for i in image_paths if i.split('/')[2] in patient_ids]
+        indices = [i for i in self.info_df.index if i.split('/')[2] in patient_ids]
+        self.info_df = self.info_df.loc[indices]
+        
+        labels = list(self.info_df[self.TASK])
+        classes = [f"No signs of {self.TASK}", f"Findings suggesting {self.TASK}"]
+        samples = [(image_path, label) for image_path, label in zip(image_paths, labels)]
+        return classes, samples
+
+    def get_claims_and_image_attributes(self):
+        claims = [
+                'Enlarged Cardiomediastinum',
+                'Lung Opacity',
+                'Cardiomegaly',
+                'Lung Lesion',
+                'Edema',
+                'Consolidation',
+                'Pneumonia',
+                'Atelectasis',
+                'Pneumothorax',
+                'Pleural Effusion',
+                'Pleural Other',
+                'Fracture',
+                'Support Devices'
+            ]
+        claims = [i for i in claims if i != self.TASK]
+        image_attribute = self.info_df[claims].values
+        claims = claims + [
+                self.augmented_claim[c] for c in claims
+            ]
+        image_attribute = np.concatenate(
+                [image_attribute, image_attribute], axis=1
+            )
+        return claims, image_attribute
+    
+    
+@register_dataset(name="chexpert_augmentedv2")
+class CheXpertAgv2(DatasetWithAttributes):
+    def __init__(
+        self,
+        config,
+        root: str,
+        train: bool = False,
+        transform: T.Compose = None,
+        return_attribute: bool = False,
+    ):
+        super().__init__(
+            root, train=train, transform=transform, return_attribute=return_attribute
+        )
+        self.augmented_claim = {
+                'Heart and sourrounding areas looks bigger than normal': ['Enlarged Cardiomediastinum', 'Cardiomegaly'], 
+                'Abnormal spot found in the lung': ['Lung Lesion'] ,
+                'Swelling caused by fluid buildup': ['Edema'],
+                'Lung area filled with fluid, not air': ['Consolidation'],
+                'Lung infection causing fluid and inflammation': ['Pneumonia'],
+                'Part of lung has collapsed or shrunk': ['Atelectasis'],
+                'Air outside lung causes it to collapse': ['Pneumothorax'],
+                'Extra fluid or other materials between lung and chest wall': ['Pleural Effusion', 'Pleural Other'],
+                 'A broken bone': ['Fracture'], 
+                'Medical tools like tubes or wires in chest': ['Support Devices']
+        }
+        self.TASK = config.data.task
+        self.op = "train" if train else "val"
+        if self.op == "train":
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "train_visualCheXbert.csv"),
+                header=0,
+                index_col=0,
+            )
+        else:
+            self.info_df = pd.read_csv(
+                os.path.join(self.root, "chexpert", "val.csv"),
+                header=0,
+                index_col=0,
+            )
+        self.classes, self.samples = self.get_classes_and_samples()
+        self.claims, self.image_attribute = self.get_claims_and_image_attributes()
+
+    def get_classes_and_samples(self):
+        image_dir = os.path.join(self.root, "chexpert", self.op)
+        patient_ids = os.listdir(image_dir)
+        # only keep the patients with id < 10000 (for training)
+        if self.op == "train":
+            patient_ids = [i for i in patient_ids if int(i.removeprefix("patient")) < 10000]
+        image_paths = list(self.info_df.index)
+        image_paths = [os.path.join(image_dir, i.split('/')[2], '/'.join(i.split('/')[3:])) for i in image_paths if i.split('/')[2] in patient_ids]
+        indices = [i for i in self.info_df.index if i.split('/')[2] in patient_ids]
+        self.info_df = self.info_df.loc[indices]
+      
+        labels = list(self.info_df[self.TASK])
+        classes = [f"No signs of {self.TASK}", f"Findings suggesting {self.TASK}"]
+        samples = [(image_path, label) for image_path, label in zip(image_paths, labels)]
+        return classes, samples
+
+    def get_claims_and_image_attributes(self):
+        claims = [
+                'Enlarged Cardiomediastinum',
+                'Lung Opacity',
+                'Cardiomegaly',
+                'Lung Lesion',
+                'Edema',
+                'Consolidation',
+                'Pneumonia',
+                'Atelectasis',
+                'Pneumothorax',
+                'Pleural Effusion',
+                'Pleural Other',
+                'Fracture',
+                'Support Devices'
+            ]
+        claims = [i for i in claims if i != self.TASK]
+        image_attribute = self.info_df[claims].values
+        image_attribute_aug = np.zeros((len(image_attribute), len(self.augmented_claim.keys())))
+        for idx, (aug_claim, claim) in enumerate(self.augmented_claim.items()):
+            for claim_ in claim:
+                image_attribute_aug[:, idx] += image_attribute[:, claims.index(claim_)]
+            claims.append(aug_claim)
+        image_attribute_aug = (image_attribute_aug > 0).astype(int)
+        image_attribute = np.concatenate(
+                [image_attribute, image_attribute_aug], axis=1
+            )
+        return claims, image_attribute
+    
+
+@register_dataset(name="imagenet")
+class ImageNet(DatasetWithAttributes):
     def __init__(
         self,
         root: str,
@@ -184,13 +415,76 @@ class Imagenette(DatasetWithAttributes):
         super().__init__(
             root, train=train, transform=transform, return_attribute=return_attribute
         )
-        self.op = "train" if train else "test"
+        self.op = "train" if train else "val"
 
         self.classes, self.samples = self.get_classes_and_samples()
         self.claims, self.image_attribute = self.get_claims_and_image_attributes()
 
     def get_classes_and_samples(self):
-        image_root = os.path.join(self.root, "imagenette", self.op)
-        wnids, wnid_to_idx = find_classes(image_root)
-        classes = [self.WNID_TO_CLASS[wnid][0] for wnid in wnids]
-        samples = make_dataset(image_root, wnid_to_idx, extensions=".jpeg")
+        dataset_dir = os.path.join(self.root, "ImageNet")
+
+        # with open(os.path.join(dataset_dir, "imagenette_classes.txt")) as f:
+        #     lines = f.readlines()
+        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
+        #     lines += f.readlines()
+        # with open(os.path.join(dataset_dir, "wnids_to_class.txt")) as f:
+        #     lines = f.readlines()
+        with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
+            lines = f.readlines()
+
+        wnids_to_class = {}
+        for line in lines:
+            line = line.strip().replace(", ", ",")
+            chunks = line.split()
+            wnid, class_names = chunks[0], " ".join(chunks[1:])
+            class_name = class_names.split(",")[0]
+            wnids_to_class[wnid] = class_name
+
+        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
+        #     lines = f.readlines()
+        #     wnids_to_class = {}
+        #     for line in lines:
+        #         chunks = [c.strip().replace(",", "") for c in line.split()]
+        #         wnid = chunks[0]
+        #         classes = chunks[1:]
+        #         wnids_to_class[wnid] = classes
+
+        # with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
+        #     lines = f.readlines()
+        #     lines = [line.strip().split() for line in lines]
+        #     wnids = [wnid for wnid, _, _ in lines]
+        #     wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+        wnids = list(wnids_to_class.keys())
+        classes = list(wnids_to_class.values())
+        wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+        image_dir = os.path.join(dataset_dir, self.op)
+        samples = make_dataset(image_dir, wnid_to_idx, extensions=".jpeg")
+
+        samples_per_class = 200
+        class_samples = {k: [] for k, _ in enumerate(classes)}
+        for filename, class_idx in samples:
+            class_samples[class_idx].append((filename, class_idx))
+        class_samples = {k: v[:samples_per_class] for k, v in class_samples.items()}
+
+        samples = []
+        for class_idx, class_samples in class_samples.items():
+            samples.extend(class_samples)
+        return classes, samples
+
+    def get_claims_and_image_attributes(self):
+        attribute_dir = os.path.join(self.root, "ImageNet", "attributes")
+        with open(os.path.join(attribute_dir, "attributes.txt")) as f:
+            lines = f.readlines()
+            claims = [line.strip() for line in lines]
+
+        op_image_attribute_path = os.path.join(
+            attribute_dir, f"{self.op}_image_attribute.npy"
+        )
+        assert os.path.exists(op_image_attribute_path), (
+            f"Image attribute file {op_image_attribute_path} not found. "
+            "Make sure to run `preprocess/imagenet/label_concept_vqa.py` first, "
+            "or that the path is correct."
+        )
+        return claims, np.load(op_image_attribute_path)

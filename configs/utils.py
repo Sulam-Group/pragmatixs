@@ -1,8 +1,8 @@
 import os
-from copy import deepcopy
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import product
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any
 
 import pandas as pd
 import torch
@@ -32,16 +32,18 @@ def _set(dict, key, value):
 
 
 class DataConfig(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.dataset: str = config_dict.get("dataset", None)
         self.classifier: str = config_dict.get("classifier", None)
         self.explanation_length: int = config_dict.get("explanation_length", None)
+        self.distributed: bool = config_dict.get("distributed", False)
+        self.task: str = config_dict.get("task", None)
 
 
 class SpeakerConfig(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.width: int = config_dict.get("width", None)
@@ -58,15 +60,13 @@ class SpeakerConfig(ConfigDict):
         self.alpha: float = config_dict.get("alpha", None)
         self.k: int = config_dict.get("k", None)
 
-        self.lr: float = config_dict.get("lr", None)
-        self.wd: float = config_dict.get("wd", None)
-
 
 class ListenerConfig(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.type: str = config_dict.get("type", None)
+        self.preference: str = config_dict.get("preference", None)
 
         self.width: int = config_dict.get("width", None)
         self.heads: int = config_dict.get("heads", None)
@@ -74,9 +74,6 @@ class ListenerConfig(ConfigDict):
 
         self.gamma: float = config_dict.get("gamma", None)
         self.k: int = config_dict.get("k", None)
-
-        self.lr: float = config_dict.get("lr", None)
-        self.wd: float = config_dict.get("wd", None)
 
         # distributional listener config
         self.prior: Mapping[str, float] = config_dict.get("prior", None)
@@ -98,23 +95,26 @@ class DistributionListenerConfig(ListenerConfig):
         self.temperature_scale: float = kwargs.get("temperature_scale", None)
 
 
+class TrainingConfig(ConfigDict):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
+        super().__init__()
+
+        self.iterations: int = config_dict.get("iterations", None)
+        self.batch_size: int = config_dict.get("batch_size", None)
+        self.min_lr: float = config_dict.get("min_lr", None)
+        self.max_lr: float = config_dict.get("max_lr", None)
+        self.wd: float = config_dict.get("wd", None)
+        self.max_grad_norm: float = config_dict.get("max_grad_norm", None)
+
+
 class Config(ConfigDict):
-    def __init__(self, config_dict: Optional[Mapping[str, Any]] = {}):
+    def __init__(self, config_dict: Mapping[str, Any] | None = {}):
         super().__init__()
 
         self.data = DataConfig(config_dict.get("data", {}))
         self.speaker = SpeakerConfig(config_dict.get("speaker", {}))
         self.listener = ListenerConfig(config_dict.get("listener", {}))
-
-        # listener_type = config.get("listener", {}).get("type", "none")
-        # if listener_type == "claim":
-        #     self.listener = ListenerConfig(**kwargs.get("listener", {}))
-        # elif listener_type == "topic":
-        #     self.listener = TopicListenerConfig(**kwargs.get("listener", {}))
-        # elif listener_type == "distribution":
-        #     self.listener = DistributionListenerConfig(**kwargs.get("listener", {}))
-        # else:
-        #     raise ValueError(f"Unknown listener type {listener_type}")
+        self.training = TrainingConfig(config_dict.get("training", {}))
 
     def classifier_name(self):
         return (
@@ -132,7 +132,7 @@ class Config(ConfigDict):
         alpha = self.speaker.alpha
 
         run_name = (
-            f"{dataset_name}"
+            f"_{dataset_name}"
             f"_{listener_type}"
             f"_len{explanation_length}"
             f"_gamma{gamma}"
@@ -148,10 +148,15 @@ class Config(ConfigDict):
         os.makedirs(out_dir, exist_ok=True)
         return os.path.join(out_dir, f"{self.run_name()}")
 
+    def train_cache_dir(self, workdir=Constants.workdir):
+        train_cache_dir = os.path.join(workdir, "data", "train_cache", self.run_name())
+        os.makedirs(train_cache_dir, exist_ok=True)
+        return train_cache_dir
+
     def state_path(self, workdir=Constants.workdir):
         weight_dir = os.path.join(workdir, "weights", self.run_name())
         os.makedirs(weight_dir, exist_ok=True)
-        with open(os.path.join(weight_dir, "latest.txt"), "r") as f:
+        with open(os.path.join(weight_dir, "latest.txt")) as f:
             latest = f.read().strip()
         return os.path.join(weight_dir, latest)
 
@@ -160,7 +165,7 @@ class Config(ConfigDict):
         os.makedirs(results_dir, exist_ok=True)
         return os.path.join(results_dir, f"{self.run_name()}.pkl")
 
-    def get_results(self, workdir=Constants.workdir):
+    def get_results(self, workdir=Constants.workdir) -> pd.DataFrame:
         results_path = self.results_path(workdir=workdir)
         results = pd.read_pickle(results_path)
         results.set_index("idx", inplace=True)
@@ -196,7 +201,7 @@ def register_config(name: str):
 
 
 def get_config(
-    name: str, config_dict: Optional[Mapping[str, Any]] = {}
+    name: str, config_dict: Mapping[str, Any] | None = {}
 ) -> Config | Iterable[Config]:
     config: Config = configs[name]()
 
