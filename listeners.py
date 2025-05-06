@@ -29,6 +29,7 @@ class Listener(nn.Module):
         listener = cls(config, n_classes, claims, device=device)
         state_path = config.state_path(workdir=workdir)
         state = torch.load(state_path, map_location=device)
+        
         listener.load_state_dict(state["listener"])
         listener.eval()
         return listener
@@ -178,6 +179,7 @@ class TopicListener(ClaimListener):
         device=C.device,
     ):
         super().__init__(config, n_classes, claims, workdir=workdir, device=device)
+        self.data_name = config.data.dataset
         self.prior = torch.tensor(config.listener.prior).to(device)
         self.temperature_scale = config.listener.temperature_scale
 
@@ -188,13 +190,20 @@ class TopicListener(ClaimListener):
 
         self._super_forward = super().forward
 
-    @staticmethod
-    def load_attribute_topic(workdir=C.workdir):
-        attribute_dir = os.path.join(workdir, "data", "CUB", "attributes")
-        with open(os.path.join(attribute_dir, "attribute_topic.txt")) as f:
-            lines = f.readlines()
-            lines = [line.strip().split() for line in lines]
-            attribute_topic = [int(idx) for _, idx in lines]
+    # @staticmethod
+    def load_attribute_topic(self, workdir=C.workdir):
+        if self.data_name == "cub":
+            attribute_dir = os.path.join(workdir, "data", "CUB", "attributes")
+            with open(os.path.join(attribute_dir, "attribute_topic.txt"), "r") as f:
+                lines = f.readlines()
+                lines = [line.strip().split() for line in lines]
+                attribute_topic = [int(idx) for _, idx in lines ]
+        elif self.data_name == "chexpert":
+            attribute_topic = [1]*12
+        elif self.data_name == 'chexpert_augmented':
+            attribute_topic = [1]*12 +[2]*12
+        elif self.data_name == 'chexpert_augmentedv2':
+            attribute_topic = [1]*12 +[2]*10
         return attribute_topic
 
     def get_explanation_topic(self, explanation):
@@ -212,10 +221,10 @@ class TopicListener(ClaimListener):
         return explanation_topic / norm
 
     def forward(self, explanation):
-        action = self._super_forward(explanation)
+        action = self._super_forward(explanation) # batch_size x n_classes
 
-        prior = self.prior
-        explanation_topic = self.get_explanation_topic(explanation)
+        prior = self.prior # prior distribution of topics (batch_size, n_topics)
+        explanation_topic = self.get_explanation_topic(explanation) # empirical distribution of topics (batch_size, n_topics)
         kl = torch.sum(
             explanation_topic
             * torch.log((explanation_topic + 1e-08) / (prior + 1e-08)),

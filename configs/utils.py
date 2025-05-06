@@ -40,6 +40,7 @@ class DataConfig(ConfigDict):
         self.explanation_length: int = config_dict.get("explanation_length", None)
         self.task: str = config_dict.get("task", None)
         self.distributed: bool = config_dict.get("distributed", False)
+        self.task: str = config_dict.get("task", None)
 
 
 class SpeakerConfig(ConfigDict):
@@ -66,6 +67,7 @@ class ListenerConfig(ConfigDict):
         super().__init__()
 
         self.type: str = config_dict.get("type", None)
+        self.preference: str = config_dict.get("preference", None)
 
         self.width: int = config_dict.get("width", None)
         self.heads: int = config_dict.get("heads", None)
@@ -131,7 +133,7 @@ class Config(ConfigDict):
         alpha = self.speaker.alpha
 
         run_name = (
-            f"{dataset_name}"
+            f"_{dataset_name}"
             f"_{listener_type}"
             f"_len{explanation_length}"
             f"_gamma{gamma}"

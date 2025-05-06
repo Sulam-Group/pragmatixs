@@ -64,7 +64,10 @@ class PredictionDataset(Dataset):
         classifier.eval()
 
         classes = dataset.classes
-        class_prompts = [f"A photo of a {c}" for c in classes]
+        if config.data.dataset != "chexpert":
+            class_prompts = [f"A photo of a {c}" for c in classes]
+        else:
+            class_prompts = classes
 
         dataloader, indices = get_loader_and_indices(
             config=config, dataset=dataset, shuffle=False

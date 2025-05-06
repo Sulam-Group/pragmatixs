@@ -171,3 +171,6 @@ batches
 wandb
 weights*
 figures
+
+# log
+nohup.out

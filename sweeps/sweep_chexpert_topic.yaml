@@ -1,0 +1,11 @@
+program: train.py
+name: sweep_all
+method: grid
+parameters:
+  config:
+    value: "chexpert_topic"
+  alpha:
+    values: [0.2, 0.0]
+  preference:
+    values: ['patient', 'doctor']
+  

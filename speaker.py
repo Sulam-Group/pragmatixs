@@ -21,12 +21,12 @@ class ClaimSpeaker(nn.Module):
         device=C.device,
     ):
         super().__init__()
-        self.context_length = context_length = config.data.explanation_length + 1
+        self.context_length = context_length = config.data.explanation_length + 1 # 12+1
         self.claims = claims
 
         self.vocab_size = vocab_size = len(claims) + 3
-        width = config.speaker.width
-        heads = config.speaker.heads
+        width = config.speaker.width # 256
+        heads = config.speaker.heads # 4
         unimodal_layers = multimodal_layers = config.speaker.layers // 2
         n_queries = config.speaker.n_queries or (config.data.explanation_length // 2)
         attn_pooler_heads = config.speaker.attn_pooler_heads
@@ -57,7 +57,7 @@ class ClaimSpeaker(nn.Module):
         )
 
         self.attn_pool_gen = AttentionalPooler(
-            width, classifier.width, n_head=attn_pooler_heads, n_queries=n_queries
+            width, classifier.width, n_head=attn_pooler_heads, n_queries=n_queries # classifier.width = 1024
         )
         self.ln_attn_pool_gen = LayerNorm(width)
 
