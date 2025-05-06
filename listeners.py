@@ -198,8 +198,12 @@ class TopicListener(ClaimListener):
                 lines = f.readlines()
                 lines = [line.strip().split() for line in lines]
                 attribute_topic = [int(idx) for _, idx in lines ]
-        elif self.data_name.startswith("chexpert"):
+        elif self.data_name == "chexpert":
+            attribute_topic = [1]*12
+        elif self.data_name == 'chexpert_augmented':
             attribute_topic = [1]*12 +[2]*12
+        elif self.data_name == 'chexpert_augmentedv2':
+            attribute_topic = [1]*12 +[2]*10
         return attribute_topic
 
     def get_explanation_topic(self, explanation):

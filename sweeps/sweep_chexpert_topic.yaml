@@ -6,12 +6,6 @@ parameters:
     value: "chexpert_topic"
   alpha:
     values: [0.2, 0.0]
-  gamma:
-    values: [0.4]
-  explanation_length:
-    values: [12]
-  temperature_scale:
-    values: [2]  
   preference:
     values: ['patient', 'doctor']
   

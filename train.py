@@ -1,6 +1,7 @@
 import argparse
 import logging
 
+import numpy as np
 import torch
 import torch.distributed as distributed
 import torch.nn as nn
@@ -374,6 +375,7 @@ def evaluate(
 
 def main(args):
     config_name = args.config
+    # config_name = 'chexpert_claim'
     listener_type = args.listener_type
     explanation_length = args.explanation_length
     k = args.k
@@ -404,6 +406,12 @@ def main(args):
         config.listener.k = listener_k
     if temperature_scale is not None:
         config.listener.temperature_scale = temperature_scale
+    if preference is not None:
+        config.listener.preference = preference
+    if config.listener.preference == "doctor":
+        config.listener.prior = [1, 0]
+    elif config.listener.preference == "patient":
+        config.listener.prior = [0, 1]
 
     rank = 0
     if dist:

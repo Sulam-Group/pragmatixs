@@ -132,7 +132,7 @@ class Config(ConfigDict):
         alpha = self.speaker.alpha
 
         run_name = (
-            f"{dataset_name}"
+            f"_{dataset_name}"
             f"_{listener_type}"
             f"_len{explanation_length}"
             f"_gamma{gamma}"
