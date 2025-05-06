@@ -1,0 +1,387 @@
+import argparse
+import os
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+import wandb
+from classifiers import get_classifier
+from configs import Config
+from configs import Constants as C
+from configs import get_config
+from datasets import get_dataset
+from listeners import Listener, get_listener
+from speaker import ClaimSpeaker
+from train_utils import (
+    ExplanationDataset,
+    Monitor,
+    PredictionDataset,
+    PreferenceDataset,
+    initialize_optimizer,
+)
+
+device = C.device
+monitor = Monitor()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str)
+    parser.add_argument("--explanation_length", type=int, default=None)
+    parser.add_argument("--k", type=int, default=None)
+    parser.add_argument("--beta", type=float, default=None)
+    parser.add_argument("--gamma", type=float, default=None)
+    parser.add_argument("--alpha", type=float, default=None)
+    parser.add_argument("--listener_k", type=int, default=None)
+    parser.add_argument("--temperature_scale", type=float, default=None)
+    parser.add_argument("--workdir", type=str, default=C.workdir)
+    return parser.parse_args()
+
+
+def update_speaker(
+    config: Config,
+    prediction_dataset: PredictionDataset,
+    preference_dataset: PreferenceDataset,
+    speaker: ClaimSpeaker,
+    optimizer: torch.optim.Optimizer,
+):
+    speaker.train()
+    monitor.zero()
+
+    beta = config.speaker.beta
+
+    dataloader = DataLoader(preference_dataset, batch_size=16, shuffle=True)
+    for i, data in enumerate(tqdm(dataloader)):
+        image_idx = data["image_idx"]
+
+        image_tokens = torch.from_numpy(
+            np.stack(
+                [prediction_dataset[_idx]["image_tokens"] for _idx in image_idx], axis=0
+            )
+        ).to(device)
+        chosen = data["chosen"].to(device)
+        rejected = data["rejected"].to(device)
+        ref_chosen_logp = data["chosen_logp"].to(device)
+        ref_rejected_logp = data["rejected_logp"].to(device)
+
+        chosen_logp = speaker.explanation_logp(image_tokens, chosen)
+        rejected_logp = speaker.explanation_logp(image_tokens, rejected)
+
+        logratios = chosen_logp - rejected_logp
+        ref_logratios = ref_chosen_logp - ref_rejected_logp
+        logits = logratios - ref_logratios
+        loss = -F.logsigmoid(beta * logits).sum()
+        loss.backward()
+        nn.utils.clip_grad_norm_(speaker.parameters(), 1.0)
+        optimizer.step()
+
+        monitor.update(
+            {
+                "chosen logp": chosen_logp.sum().cpu().item(),
+                "rejected logp": rejected_logp.sum().cpu().item(),
+                "logratios": logratios.sum().cpu().item(),
+                "speaker loss": loss.cpu().item(),
+            },
+            num_samples=image_tokens.size(0),
+        )
+
+        log_step = 20
+        if (i + 1) % log_step == 0:
+            monitor.log(prefix="train")
+
+
+def update_listener(
+    prediction_dataset: PredictionDataset,
+    explanation_dataset: ExplanationDataset,
+    listener: Listener,
+    optimizer: torch.optim.Optimizer,
+):
+    listener.train()
+    monitor.zero()
+
+    dataloader = DataLoader(explanation_dataset, batch_size=16, shuffle=True)
+    for i, data in enumerate(tqdm(dataloader)):
+        image_idx = data["image_idx"]
+
+        explanation = data["explanation"].to(device)
+        prediction = torch.from_numpy(
+            np.stack(
+                [prediction_dataset[_idx]["prediction"] for _idx in image_idx], axis=0
+            )
+        ).to(device)
+
+        optimizer.zero_grad()
+        action = listener(explanation)
+        loss = F.cross_entropy(action, prediction, reduction="sum")
+        loss.backward()
+        nn.utils.clip_grad_norm_(listener.parameters(), 1.0)
+        optimizer.step()
+
+        listener_prediction = torch.argmax(action, dim=-1)
+        correct = (listener_prediction == prediction).float()
+
+        monitor.update(
+            {
+                "listener loss": loss.cpu().item(),
+                "listener accuracy": correct.sum().cpu().item(),
+            },
+            num_samples=explanation.size(0),
+        )
+
+        log_step = 20
+        if (i + 1) % log_step == 0:
+            monitor.log(prefix="train")
+
+
+def train_iteration(
+    config: Config,
+    prediction_dataset: PredictionDataset,
+    speaker: ClaimSpeaker,
+    listener: Listener,
+    speaker_optimizer: torch.optim.Optimizer,
+    listener_optimizer: torch.optim.Optimizer,
+):
+    print("Creating preference dataset...")
+    preference_dataset = PreferenceDataset(
+        config, prediction_dataset, speaker, listener, device=device
+    )
+    print("Created preference dataset")
+    print(
+        f"\tNumber of preferences: {len(preference_dataset)}\n"
+        f"\tAverage chosen score: {preference_dataset.chosen_score.mean().item():.2f}"
+    )
+
+    print("Updating speaker...")
+    update_speaker(
+        config, prediction_dataset, preference_dataset, speaker, speaker_optimizer
+    )
+
+    print("Creating explanation dataset...")
+    explanation_dataset = ExplanationDataset(
+        config, prediction_dataset, speaker, device=device
+    )
+
+    print("Updating listener...")
+    update_listener(
+        prediction_dataset, explanation_dataset, listener, listener_optimizer
+    )
+    
+@torch.no_grad()
+def evaluate_classifier(
+    dataset, prediction_dataset: PredictionDataset, classifier: nn.Module, device: torch.device
+):
+    classifier.eval()
+    samples = dataset.get_classes_and_samples()
+    Labels = [i[1] for i in samples[1]]
+    
+    dataloader = DataLoader(prediction_dataset, batch_size=16, shuffle=False)
+    Predictions = []
+    for _, data in enumerate(tqdm(dataloader)):
+        prediction = data["prediction"]
+        Predictions.extend(prediction.tolist())
+    # positive and negative ratios
+    positive_p = np.sum(np.array(Labels) == 1) 
+    negative_n = np.sum(np.array(Labels) == 0)
+    print(
+        f"Positive: {positive_p}, "
+        f"Negative: {negative_n}"
+    )
+    accuracy = np.sum(np.array(Labels) == np.array(Predictions)) / len(Labels)
+    print(f"Accuracy: {accuracy:.2f}")
+    # sensitivity and specificity
+    tp = np.sum(
+        np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 1)
+    )
+    tn = np.sum(
+        np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 0)
+    )
+    fp = np.sum(
+        np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 1)
+    )
+    fn = np.sum(
+        np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 0)
+    )
+    sensitivity = tp / (tp + fn) if tp + fn > 0 else 0
+
+    precision = tp / (tp + fp) if tp + fp > 0 else 0
+    f1_score = (
+        2 * precision * sensitivity / (precision + sensitivity)
+    )
+    specificity = tn / (tn + fp) if tn + fp > 0 else 0
+    print(f"F1 score: {f1_score:.2f}")
+    print(f"Sensitivity: {sensitivity:.2f}")
+    print(f"Specificity: {specificity:.2f}")
+    print(f"Precision: {precision:.2f}")
+    print(f"TP: {tp}, TN: {tn}, FP: {fp}, FN: {fn}")
+    print(f"TPR: {tp / (tp + fn):.2f}, TNR: {tn / (tn + fp):.2f}")
+        
+
+
+@torch.no_grad()
+def evaluate(dataset: PredictionDataset, speaker: ClaimSpeaker, listener: Listener):
+    speaker.eval()
+    listener.eval()
+    monitor.zero()
+
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+    for _, data in enumerate(tqdm(dataloader)):
+        image_tokens = data["image_tokens"].to(device) # (batch_size, seq_len, dim) (16, 256, 1024)
+        image_attribute = data["image_attribute"].to(device) # (batch_size, num_attributes) (16, 312)
+        prediction = data["prediction"].to(device) # (batch_size) (16)
+
+        explanation, explanation_logp = speaker.explain(image_tokens)
+        consistency, action = listener.listen(image_attribute, explanation)
+
+        claims = explanation[..., 0]
+        claims_cls = explanation[..., 1]
+
+        _image_attribute = torch.cat(
+            [
+                image_attribute,
+                torch.zeros(
+                    image_attribute.size(0),
+                    listener.speaker_vocab_size - len(listener.claims),
+                    device=image_attribute.device,
+                ),
+            ],
+            dim=-1,
+        )
+        target_cls = torch.gather(_image_attribute, -1, claims)
+
+        claims_mask = claims < len(listener.claims)
+        correct = claims_mask * (claims_cls == target_cls)
+        accuracy = torch.sum(correct, dim=-1) / torch.sum(claims_mask, dim=-1)
+
+        listener_prediction = torch.argmax(action, dim=-1)
+        correct = (listener_prediction == prediction).float()
+
+        explanation_length = torch.sum(
+            explanation[..., 0] < len(speaker.claims), dim=-1
+        )
+        explanation_sentiment = (
+            torch.sum(explanation[..., 1], dim=-1) / explanation_length
+        )
+
+        monitor.update(
+            {
+                "explanation accuracy": accuracy.sum().cpu().item(),
+                "explanation consistency": consistency.sum().cpu().item(),
+                "explanation logp": explanation_logp.sum().cpu().item(),
+                "explanation length": explanation_length.sum().cpu().item(),
+                "explanation sentiment": explanation_sentiment.sum().cpu().item(),
+                "listener accuracy": correct.sum().cpu().item(),
+            },
+            num_samples=image_tokens.size(0),
+            increase_global_samples=False,
+        )
+
+    monitor.log(prefix="val")
+
+
+def main(args):
+    config_name = args.config
+    explanation_length = args.explanation_length
+    k = args.k
+    beta = args.beta
+    gamma = args.gamma
+    alpha = args.alpha
+    listener_k = args.listener_k
+    temperature_scale = args.temperature_scale
+    workdir = args.workdir
+
+    config = get_config(config_name)
+    if explanation_length is not None:
+        config.data.explanation_length = explanation_length
+    if k is not None:
+        config.speaker.k = k
+    if beta is not None:
+        config.speaker.beta = beta
+    if gamma is not None:
+        config.listener.gamma = gamma
+    if alpha is not None:
+        config.speaker.alpha = alpha
+    if listener_k is not None:
+        config.listener.k = listener_k
+    if temperature_scale is not None:
+        config.listener.temperature_scale = temperature_scale
+
+    classifier = get_classifier(
+        config, from_pretrained=True, workdir=workdir, device=device
+    )
+
+    train_dataset = get_dataset(
+        config, train=True, transform=classifier.preprocess, return_attribute=True
+    )
+    val_dataset = get_dataset(
+        config, train=False, transform=classifier.preprocess, return_attribute=True
+    )
+
+    classes, claims = train_dataset.classes, train_dataset.claims
+    speaker = ClaimSpeaker(config, classifier, claims, device=device)
+    Listener = get_listener(config.listener.type)
+    listener = Listener(config, len(classes), claims, workdir=workdir, device=device)
+
+    speaker_optimizer = initialize_optimizer(
+        speaker, config.speaker.lr, config.speaker.wd
+    )
+    listener_optimizer = initialize_optimizer(
+        listener, config.listener.lr, config.listener.wd
+    )
+
+    print("Creating prediction datasets")
+    train_prediction_dataset = PredictionDataset(
+        config, train_dataset, workdir=workdir, device=device
+    )
+    val_prediction_dataset = PredictionDataset(
+        config, val_dataset, workdir=workdir, device=device
+    )
+    
+    print("Evaluating pretrained classifier (Training set)")
+    evaluate_classifier(
+        train_dataset, train_prediction_dataset, classifier, device=device
+    )
+    print("Evaluating pretrained classifier (Test set)")
+    evaluate_classifier(
+        val_dataset, val_prediction_dataset, classifier, device=device
+    )
+
+    run_name = config.run_name()
+    wandb.init(project="pragmatics", name=run_name, config=config.to_dict())
+
+    print("Evaluating initialization...")
+    evaluate(val_prediction_dataset, speaker, listener)
+
+    total_iterations = 20
+    for t in range(total_iterations):
+        print(f"Iteration {t+1}")
+        train_iteration(
+            config,
+            train_prediction_dataset,
+            speaker,
+            listener,
+            speaker_optimizer,
+            listener_optimizer,
+        )
+
+        print("Evaluating speaker...")
+        evaluate(val_prediction_dataset, speaker, listener)
+
+        weights_dir = os.path.join(workdir, "weights", run_name)
+        os.makedirs(weights_dir, exist_ok=True)
+
+        if (t + 1) % 10 == 0:
+            torch.save(
+                {"speaker": speaker.state_dict(), "listener": listener.state_dict()},
+                os.path.join(weights_dir, f"iteration_{t+1}.pt"),
+            )
+            with open(os.path.join(weights_dir, "latest.txt"), "w") as f:
+                f.write(f"iteration_{t+1}.pt")
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)

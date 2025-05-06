@@ -64,7 +64,7 @@ def test(
     results_dir = os.path.join(workdir, "results", config.data.dataset.lower())
     os.makedirs(results_dir, exist_ok=True)
 
-    run_name = get_run_name(config, max_queries, "biased")
+    run_name = get_run_name(config, max_queries, "random")
     results_path = os.path.join(results_dir, f"{run_name}.pkl")
 
     df = pd.DataFrame(results_data)
