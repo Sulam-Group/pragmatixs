@@ -38,6 +38,7 @@ class DataConfig(ConfigDict):
         self.dataset: str = config_dict.get("dataset", None)
         self.classifier: str = config_dict.get("classifier", None)
         self.explanation_length: int = config_dict.get("explanation_length", None)
+        self.task: str = config_dict.get("task", None)
         self.distributed: bool = config_dict.get("distributed", False)
 
 

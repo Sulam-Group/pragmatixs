@@ -62,10 +62,10 @@ def train(
     workdir=C.workdir,
 ):
     run_name = get_run_name(config, max_queries, sampling)
-    weights_dir = os.path.join(
-        workdir, "weights", config.data.dataset.lower(), run_name
-    )
-    os.makedirs(weights_dir, exist_ok=True)
+    weights_dir = os.path.join(workdir, "weights", config.data.dataset.lower())
+
+    run_weights_dir = os.path.join(weights_dir, run_name)
+    os.makedirs(run_weights_dir, exist_ok=True)
 
     rank = 0
     if dist:
@@ -96,7 +96,7 @@ def train(
 
     if sampling == "biased":
         random_run_name = run_name.replace("biased", "random")
-        random_weights_dir = os.path.join(workdir, "weights", random_run_name)
+        random_weights_dir = os.path.join(weights_dir, random_run_name)
 
         with open(os.path.join(random_weights_dir, "latest.txt")) as f:
             latest_weights = f.read().strip()
@@ -216,8 +216,10 @@ def train(
                     "querier": querier_state_dict,
                     "classifier": classifier_state_dict,
                 }
-                torch.save(state_dict, os.path.join(weights_dir, f"epoch_{epoch+1}.pt"))
-                with open(os.path.join(weights_dir, "latest.txt"), "w") as f:
+                torch.save(
+                    state_dict, os.path.join(run_weights_dir, f"epoch_{epoch+1}.pt")
+                )
+                with open(os.path.join(run_weights_dir, "latest.txt"), "w") as f:
                     f.write(f"epoch_{epoch+1}.pt")
 
         running_loss = 0.0
