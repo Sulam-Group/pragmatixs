@@ -1,8 +1,10 @@
 import logging
 import os
+import socket
 
 import numpy as np
 import torch
+import torch.distributed as distributed
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -23,7 +25,12 @@ class PredictionDataset(Dataset):
         workdir=C.workdir,
         device=C.device,
     ):
-        cache_dir = os.path.join(workdir, "data", "embed_cache")
+        hostname = socket.gethostname()
+        if hostname == "io85":
+            cache_dir = os.path.join(workdir, "io85_data", "embed_cache")
+        else:
+            cache_dir = os.path.join(workdir, "data", "embed_cache")
+
         self.embed_dir = embed_dir = os.path.join(
             cache_dir,
             f"{config.data.dataset.lower()}_{config.classifier_name()}",
@@ -37,8 +44,8 @@ class PredictionDataset(Dataset):
             self.make_dataset(
                 config=config, dataset=dataset, workdir=workdir, device=device
             )
-            if config.data.distributed:
-                torch.distributed.barrier()
+            if distributed.is_initialized():
+                distributed.barrier()
 
         logger.info(f"Loading {dataset.op} prediction dataset from {embed_dir}")
         self.filenames = os.listdir(embed_dir)
@@ -70,7 +77,7 @@ class PredictionDataset(Dataset):
             class_prompts = classes
 
         dataloader, indices = get_loader_and_indices(
-            config=config, dataset=dataset, shuffle=False
+            config=config, dataset=dataset, batch_size=32, shuffle=False
         )
 
         start = 0

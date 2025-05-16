@@ -19,10 +19,11 @@ class CUBClaimConfig(Config):
         self.speaker.n_queries = None
         self.speaker.attn_pooler_heads = 4
 
-        self.listener.type = "claim"
-        # self.listener.type = "topic"
-        self.listener.prior = [0, 0, 1 / 3, 1 / 3, 1 / 3, 0]
-        self.listener.temperature_scale = 4.0
+        # self.listener.type = "claim"
+        self.listener.type = "topic"
+        # self.listener.prior = [0, 0, 1 / 3, 1 / 3, 1 / 3, 0]
+        self.listener.prior = 6 * [1 / 6]
+        self.listener.temperature_scale = [1.0, 2.0, 4.0, 8.0]
         self.listener.gamma = 0.4
         self.listener.k = 8
 

@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from typing import Optional
 
 import numpy as np
 import torch
@@ -21,12 +22,14 @@ class ClaimSpeaker(nn.Module):
         device=C.device,
     ):
         super().__init__()
-        self.context_length = context_length = config.data.explanation_length + 1 # 12+1
+        self.context_length = context_length = (
+            config.data.explanation_length + 1
+        )  # 12+1
         self.claims = claims
 
         self.vocab_size = vocab_size = len(claims) + 3
-        width = config.speaker.width # 256
-        heads = config.speaker.heads # 4
+        width = config.speaker.width  # 256
+        heads = config.speaker.heads  # 4
         unimodal_layers = multimodal_layers = config.speaker.layers // 2
         n_queries = config.speaker.n_queries or (config.data.explanation_length // 2)
         attn_pooler_heads = config.speaker.attn_pooler_heads
@@ -57,7 +60,10 @@ class ClaimSpeaker(nn.Module):
         )
 
         self.attn_pool_gen = AttentionalPooler(
-            width, classifier.width, n_head=attn_pooler_heads, n_queries=n_queries # classifier.width = 1024
+            width,
+            classifier.width,
+            n_head=attn_pooler_heads,
+            n_queries=n_queries,  # classifier.width = 1024
         )
         self.ln_attn_pool_gen = LayerNorm(width)
 
@@ -109,7 +115,12 @@ class ClaimSpeaker(nn.Module):
         return self.text.ln_final(text)
 
     def forward(
-        self, image_tokens, explanation, binary_logits=None, gen_image_tokens=None
+        self,
+        image_tokens,
+        explanation,
+        binary_logits=None,
+        gen_image_tokens=None,
+        zero_binary_logp=False,
     ):
         claims = explanation[..., 0]
         claims_cls = explanation[..., 1]
@@ -122,6 +133,9 @@ class ClaimSpeaker(nn.Module):
             binary_logp, claims_cls.float(), reduction="none"
         )
         binary_logp[claims >= len(self.claims)] = 0
+
+        if zero_binary_logp:
+            binary_logp = torch.zeros_like(binary_logp)
 
         if gen_image_tokens is None:
             gen_image_tokens = self.attn_pool_gen(image_tokens)
@@ -151,15 +165,28 @@ class ClaimSpeaker(nn.Module):
         }
 
     @torch.no_grad()
-    def explain(self, image_tokens, length: torch.Tensor | None = None):
+    def explain(
+        self,
+        image_tokens,
+        binary_labels: Optional[torch.Tensor] = None,
+        length: Optional[torch.Tensor] = None,
+    ):
         m = image_tokens.size(0)
 
         explanation = torch.tensor(
             [[[self.bos_token_id, 0]]] * m, device=image_tokens.device
         ).long()
 
+        if binary_labels is not None:
+            special_binary_labels = torch.zeros(
+                binary_labels.size(0), 3, device=binary_labels.device
+            )
+            binary_labels = torch.cat(
+                [binary_labels, special_binary_labels], dim=-1
+            ).long()
+
         finished = torch.zeros(m, dtype=torch.bool, device=image_tokens.device)
-        binary_logits, gen_image_tokens, binary_labels = None, None, None
+        binary_logits, gen_image_tokens = None, None
         while explanation.size(1) < self.context_length:
             claims = explanation[:, :, 0]
 
@@ -168,6 +195,7 @@ class ClaimSpeaker(nn.Module):
                 explanation,
                 binary_logits=binary_logits,
                 gen_image_tokens=gen_image_tokens,
+                zero_binary_logp=binary_labels is not None,
             )
 
             if gen_image_tokens is None:

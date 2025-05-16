@@ -2,8 +2,7 @@ import logging
 import os
 
 import torch
-import torch.distributed as distributed
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from configs import Config
@@ -11,7 +10,7 @@ from configs import Constants as C
 from listeners import Listener
 from speaker import ClaimSpeaker
 from train_utils.prediction import PredictionDataset
-from train_utils.utils import get_loader_and_indices, get_rank
+from train_utils.utils import rank_zero_only
 
 logger = logging.getLogger(__name__)
 
@@ -24,55 +23,28 @@ class PreferenceDataset(Dataset):
         workdir=C.workdir,
     ):
         self.prediction_dataset = prediction_dataset
-
-        self.shard_paths = []
-        self.shard_lengths = []
-        self.index = []
-
-        world_size = 1
-        if distributed.is_initialized():
-            world_size = distributed.get_world_size()
-
-        for rank in range(world_size):
-            shard_path = os.path.join(
-                config.train_cache_dir(workdir=workdir), f"preference_rank{rank}.pt"
-            )
-            shard_data = torch.load(shard_path, map_location="cpu")
-            shard_length = shard_data["length"]
-
-            self.shard_paths.append(shard_path)
-            self.shard_lengths.append(shard_length)
-            for local_idx in range(shard_length):
-                self.index.append((rank, local_idx))
-
-        self.loaded_shard_id = None
-        self.loaded_shard = None
+        data_path = os.path.join(
+            config.train_cache_dir(workdir=workdir), f"preference.pt"
+        )
+        self.data = torch.load(data_path, map_location="cpu")
 
     def __len__(self):
-        return len(self.index)
+        return self.data["length"]
 
     def __getitem__(self, idx):
-        shard_id, local_idx = self.index[idx]
-
-        if shard_id != self.loaded_shard_id:
-            self.loaded_shard_id = shard_id
-            self.loaded_shard = torch.load(
-                self.shard_paths[shard_id], map_location="cpu"
-            )
-
-        image_idx = self.loaded_shard["image_idx"][local_idx]
+        image_idx = self.data["image_idx"][idx]
         image_tokens = torch.tensor(self.prediction_dataset[image_idx]["image_tokens"])
 
         return {
             "image_idx": image_idx.long(),
             "image_tokens": image_tokens.float(),
-            "chosen": self.loaded_shard["chosen"][local_idx].long(),
-            "rejected": self.loaded_shard["rejected"][local_idx].long(),
-            "chosen_score": self.loaded_shard["chosen_score"][local_idx],
-            "rejected_score": self.loaded_shard["rejected_score"][local_idx],
-            "chosen_logp": self.loaded_shard["chosen_logp"][local_idx],
-            "rejected_logp": self.loaded_shard["rejected_logp"][local_idx],
-            "margin_mask": self.loaded_shard["margin_mask"][local_idx],
+            "chosen": self.data["chosen"][idx].long(),
+            "rejected": self.data["rejected"][idx].long(),
+            "chosen_score": self.data["chosen_score"][idx],
+            "rejected_score": self.data["rejected_score"][idx],
+            "chosen_logp": self.data["chosen_logp"][idx],
+            "rejected_logp": self.data["rejected_logp"][idx],
+            "margin_mask": self.data["margin_mask"][idx],
         }
 
     @staticmethod
@@ -82,7 +54,6 @@ class PreferenceDataset(Dataset):
         prediction_dataset: PredictionDataset = None,
         speaker: ClaimSpeaker = None,
         listener: Listener = None,
-        epoch: int = 0,
         device=C.device,
     ):
         speaker.eval()
@@ -91,13 +62,8 @@ class PreferenceDataset(Dataset):
         explain = speaker.module.explain if config.data.distributed else speaker.explain
         listen = listener.module.listen if config.data.distributed else listener.listen
 
-        dataloader, indices = get_loader_and_indices(
-            config=config,
-            dataset=prediction_dataset,
-            batch_size=64,
-            shuffle=config.data.distributed,
-            epoch=epoch,
-        )
+        dataloader = DataLoader(prediction_dataset, batch_size=64, shuffle=False)
+        indices = list(range(len(prediction_dataset)))
 
         k = config.speaker.k
         pair_mask = torch.combinations(torch.arange(k), r=2)
@@ -182,64 +148,18 @@ class PreferenceDataset(Dataset):
         return {k: v[mask] for k, v in data.items()}
 
 
-def generate_utterances(
-    config: Config = None,
-    prediction_dataset: PredictionDataset = None,
-    speaker: ClaimSpeaker = None,
-    listener: Listener = None,
-    epoch: int = 0,
-    workdir=C.workdir,
-    device=C.device,
-):
-    logger.info("Sampling utterances...")
-
-    data_path = os.path.join(
-        config.train_cache_dir(workdir=workdir), f"utterance_rank{get_rank()}.pt"
-    )
-    if os.path.exists(data_path):
-        os.remove(data_path)
-
-    explain = speaker.module.explain if config.data.distributed else speaker.explain
-
-    dataloader, indices = get_loader_and_indices(
-        config=config,
-        dataset=prediction_dataset,
-        shuffle=config.data.distributed,
-        epoch=epoch,
-    )
-
-    k = config.speaker.k
-    n_utterances = k * len(indices)
-    data = {
-        "image_idx": torch.tensor(indices).repeat_interleave(config.speaker.k),
-        "explanation": -torch.ones(n_utterances, speaker.context_length, 2),
-    }
-
-    start = 0
-    for _, _data in enumerate(tqdm(dataloader)):
-        _data = {
-            n: torch.repeat_interleave(v, k, dim=0).to(device) for n, v in _data.items()
-        }
-
-        image_tokens = _data["image_tokens"]
-        image_attribute = _data["image_attribute"]
-        prediction = _data["prediction"]
-
-
+@rank_zero_only
 def generate_and_save_preferences(
     config: Config = None,
     prediction_dataset: PredictionDataset = None,
     speaker: ClaimSpeaker = None,
     listener: Listener = None,
-    epoch: int = 0,
     workdir=C.workdir,
     device=C.device,
 ):
     logger.info("Creating preference dataset...")
 
-    data_path = os.path.join(
-        config.train_cache_dir(workdir=workdir), f"preference_rank{get_rank()}.pt"
-    )
+    data_path = os.path.join(config.train_cache_dir(workdir=workdir), f"preference.pt")
     if os.path.exists(data_path):
         os.remove(data_path)
 
@@ -248,7 +168,6 @@ def generate_and_save_preferences(
         prediction_dataset=prediction_dataset,
         speaker=speaker,
         listener=listener,
-        epoch=epoch,
         device=device,
     )
     data["length"] = len(data["image_idx"])

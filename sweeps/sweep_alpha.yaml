@@ -3,6 +3,20 @@ name: sweep_alpha
 method: grid
 parameters:
   config:
-    value: "cub_claim"
+    value: "cub"
+  listener_type:
+    value: "claim"
+  explanation_length:
+    value: 6
   alpha:
-    values: [0.0, 0.1, 0.2, 0.4, 0.8, 1.6]
+    values: [0.1, 0.2, 0.4, 0.8]
+  gamma:
+    values: [0.0, 0.4, 0.8]
+  iterations:
+    value: 16
+  k:
+    value: 4
+  beta:
+    value: 0.6
+  listener_k:
+    value: 8

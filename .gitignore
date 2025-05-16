@@ -169,8 +169,12 @@ _results
 _weights
 batches
 wandb
-weights*
+weights
 figures
+
+io85_data
+io85_weights
+io85_results
 
 # log
 nohup.out

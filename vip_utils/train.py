@@ -12,8 +12,8 @@ from tqdm import tqdm
 import wandb
 from configs import Config
 from configs import Constants as C
-from vip_utils.cub import NetworkCUB
-from vip_utils.utils import get_run_name, load_concept_net, make_dataset
+from vip_utils.network import Network
+from vip_utils.utils import get_query_answerer, get_run_name, make_dataset
 
 
 def random_sampling(n_claims: int, max_queries: int, n_samples: int):
@@ -49,6 +49,41 @@ def biased_sampling(
     return mask
 
 
+def get_vip_networks(
+    config: Config = None,
+    num_classes: int = None,
+    num_claims: int = None,
+    max_queries: int = None,
+    tau: float = None,
+    sampling: str = None,
+    workdir=C.workdir,
+    device=C.device,
+):
+    querier = Network(query_size=num_claims, output_size=num_claims, tau=tau)
+    classifier = Network(query_size=num_claims, output_size=num_classes, tau=None)
+
+    querier = querier.to(device)
+    classifier = classifier.to(device)
+
+    if sampling == "biased":
+        weights_dir = os.path.join(workdir, "weights", config.data.dataset.lower())
+
+        random_run_name = get_run_name(config, max_queries, "random")
+        random_weights_dir = os.path.join(weights_dir, random_run_name)
+
+        with open(os.path.join(random_weights_dir, "latest.txt")) as f:
+            latest_weights = f.read().strip()
+        state_dict = torch.load(
+            os.path.join(random_weights_dir, latest_weights), map_location=device
+        )
+
+        querier_state_dict = state_dict["querier"]
+        classifier_state_dict = state_dict["classifier"]
+        querier.load_state_dict(querier_state_dict)
+        classifier.load_state_dict(classifier_state_dict)
+    return querier, classifier
+
+
 def train(
     config: Config,
     max_queries: int,
@@ -74,8 +109,16 @@ def train(
     device = torch.device(f"cuda:{rank}")
     torch.cuda.set_device(device)
 
-    train_dataset = make_dataset(config, True, workdir=workdir, device=device)
-    test_dataset = make_dataset(config, False, workdir=workdir, device=device)
+    preprocess, answer_query = get_query_answerer(
+        config=config, workdir=workdir, device=device
+    )
+
+    train_dataset = make_dataset(
+        config, True, transform=preprocess, workdir=workdir, device=device
+    )
+    test_dataset = make_dataset(
+        config, False, transform=preprocess, workdir=workdir, device=device
+    )
 
     sampler = None
     if dist:
@@ -85,29 +128,18 @@ def train(
     )
     test_dataloader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-    concept_net = load_concept_net(workdir=workdir, device=device)
-
-    n_classes = len(train_dataset.classes)
-    n_claims = len(train_dataset.claims)
-    querier = NetworkCUB(query_size=n_claims, output_size=n_claims)
-    classifier = NetworkCUB(query_size=n_claims, output_size=n_classes, tau=None)
-    querier = querier.to(device)
-    classifier = classifier.to(device)
-
-    if sampling == "biased":
-        random_run_name = run_name.replace("biased", "random")
-        random_weights_dir = os.path.join(weights_dir, random_run_name)
-
-        with open(os.path.join(random_weights_dir, "latest.txt")) as f:
-            latest_weights = f.read().strip()
-        state_dict = torch.load(
-            os.path.join(random_weights_dir, latest_weights), map_location=device
-        )
-
-        querier_state_dict = state_dict["querier"]
-        classifier_state_dict = state_dict["classifier"]
-        querier.load_state_dict(querier_state_dict)
-        classifier.load_state_dict(classifier_state_dict)
+    num_classes = len(train_dataset.classes)
+    num_claims = len(train_dataset.claims)
+    querier, classifier = get_vip_networks(
+        config=config,
+        num_classes=num_classes,
+        num_claims=num_claims,
+        max_queries=max_queries,
+        tau=tau_start,
+        sampling=sampling,
+        workdir=workdir,
+        device=device,
+    )
 
     if dist:
         querier = DistributedDataParallel(querier, device_ids=[device])
@@ -135,7 +167,7 @@ def train(
             prediction = prediction.to(device)
 
             with torch.no_grad():
-                image_attribute = concept_net.net(image)
+                image_attribute = answer_query(image)
                 image_attribute = torch.where(image_attribute > 0.0, 1.0, -1.0)
 
             if dist:
@@ -146,7 +178,7 @@ def train(
             optimizer.zero_grad()
             if sampling == "random":
                 mask = (
-                    random_sampling(n_claims, max_queries, image.size(0))
+                    random_sampling(num_claims, max_queries, image.size(0))
                     .to(device)
                     .float()
                 )
@@ -188,10 +220,10 @@ def train(
                     prediction = prediction.to(device)
 
                     with torch.no_grad():
-                        image_attribute = concept_net.net(image)
+                        image_attribute = answer_query(image)
                         image_attribute = torch.where(image_attribute > 0.0, 1.0, -1.0)
 
-                        mask = torch.zeros(image.size(0), n_claims, device=device)
+                        mask = torch.zeros(image.size(0), num_claims, device=device)
                         for _ in range(50):
                             query = querier(image_attribute * mask, mask)
                             chosen_query = query.argmax(dim=1)

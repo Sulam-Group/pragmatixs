@@ -1,4 +1,5 @@
 import os
+import socket
 from collections.abc import Iterable, Mapping
 
 import numpy as np
@@ -39,8 +40,8 @@ class DatasetWithAttributes(Dataset):
     def __getitem__(self, idx):
         path, label = self.samples[idx]
         image = Image.open(path)
-        # if ":
-        #     image = image.convert("RGB")
+        if "chexpert" not in path:
+            image = image.convert("RGB")
 
         if self.transform is not None:
             image = self.transform(image)
@@ -77,7 +78,12 @@ def get_dataset(
     if dataset_name == "chexpert":
         kwargs = {"task": config.data.task}
 
-    root = os.path.join(workdir, "data")
+    hostname = socket.gethostname()
+    if hostname == "io85":
+        root = os.path.join(workdir, "io85_data")
+    else:
+        root = os.path.join(workdir, "data")
+
     Dataset = datasets[dataset_name]
     return Dataset(
         root,
@@ -92,7 +98,6 @@ def get_dataset(
 class CUB(DatasetWithAttributes):
     def __init__(
         self,
-        config,
         root: str,
         train: bool = False,
         transform: T.Compose = None,
@@ -452,6 +457,7 @@ class ImageNet(DatasetWithAttributes):
             root, train=train, transform=transform, return_attribute=return_attribute
         )
         self.op = "train" if train else "val"
+        self.top_concepts_only = True
 
         self.classes, self.samples = self.get_classes_and_samples()
         self.claims, self.image_attribute = self.get_claims_and_image_attributes()
@@ -459,46 +465,27 @@ class ImageNet(DatasetWithAttributes):
     def get_classes_and_samples(self):
         dataset_dir = os.path.join(self.root, "ImageNet")
 
-        # with open(os.path.join(dataset_dir, "imagenette_classes.txt")) as f:
-        #     lines = f.readlines()
-        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
-        #     lines += f.readlines()
-        # with open(os.path.join(dataset_dir, "wnids_to_class.txt")) as f:
-        #     lines = f.readlines()
-        with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
+        # class_filename = "wnids_to_class"
+        class_filename = "random_classes"
+        with open(os.path.join(dataset_dir, f"{class_filename}.txt")) as f:
             lines = f.readlines()
 
-        wnids_to_class = {}
+        wnids, classes = [], []
         for line in lines:
             line = line.strip().replace(", ", ",")
             chunks = line.split()
             wnid, class_names = chunks[0], " ".join(chunks[1:])
             class_name = class_names.split(",")[0]
-            wnids_to_class[wnid] = class_name
 
-        # with open(os.path.join(dataset_dir, "imagewoof_classes.txt")) as f:
-        #     lines = f.readlines()
-        #     wnids_to_class = {}
-        #     for line in lines:
-        #         chunks = [c.strip().replace(",", "") for c in line.split()]
-        #         wnid = chunks[0]
-        #         classes = chunks[1:]
-        #         wnids_to_class[wnid] = classes
+            wnids.append(wnid)
+            classes.append(class_name)
 
-        # with open(os.path.join(dataset_dir, "top_classes.txt")) as f:
-        #     lines = f.readlines()
-        #     lines = [line.strip().split() for line in lines]
-        #     wnids = [wnid for wnid, _, _ in lines]
-        #     wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
-
-        wnids = list(wnids_to_class.keys())
-        classes = list(wnids_to_class.values())
         wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
 
         image_dir = os.path.join(dataset_dir, self.op)
         samples = make_dataset(image_dir, wnid_to_idx, extensions=".jpeg")
 
-        samples_per_class = 200
+        samples_per_class = 100
         class_samples = {k: [] for k, _ in enumerate(classes)}
         for filename, class_idx in samples:
             class_samples[class_idx].append((filename, class_idx))
@@ -518,9 +505,16 @@ class ImageNet(DatasetWithAttributes):
         op_image_attribute_path = os.path.join(
             attribute_dir, f"{self.op}_image_attribute.npy"
         )
-        assert os.path.exists(op_image_attribute_path), (
-            f"Image attribute file {op_image_attribute_path} not found. "
-            "Make sure to run `preprocess/imagenet/label_concept_vqa.py` first, "
-            "or that the path is correct."
-        )
-        return claims, np.load(op_image_attribute_path)
+        if not os.path.exists(op_image_attribute_path):
+            return claims, None
+
+        op_image_attribute = np.load(op_image_attribute_path)
+        if self.top_concepts_only:
+            with open(os.path.join(attribute_dir, "top_concepts.txt")) as f:
+                lines = f.readlines()
+                lines = [line.strip().split() for line in lines]
+                top_claim_idx = [int(claim_idx) for claim_idx, _ in lines]
+
+            claims = [claims[i] for i in top_claim_idx]
+            op_image_attribute = op_image_attribute[:, top_claim_idx]
+        return claims, op_image_attribute
