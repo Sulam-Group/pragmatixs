@@ -3,8 +3,20 @@ name: sweep_listener_k
 method: grid
 parameters:
   config:
-    value: "cub_claim"
+    value: "cub"
+  listener_type:
+    value: "claim"
+  explanation_length:
+    value: 6
   alpha:
-    value: 0.2
+    value: 0.0
+  gamma:
+    value: 0.4
+  iterations:
+    value: 16
+  k:
+    value: 4
+  beta:
+    value: 0.6
   listener_k:
-    values: [2, 4, 6, 8, 10, 12]
+    values: [4, 8, 16, 32]

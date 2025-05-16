@@ -19,7 +19,7 @@ rng = np.random.default_rng()
 
 conditions = {
     "random": None,
-    # "vip": {"max_queries": 311},
+    "vip": {"max_queries": 311},
     "speaker:literal": {"speaker.alpha": 0.0, "listener.type": "claim"},
     "speaker:pragmatic": {"speaker.alpha": 0.2, "listener.type": "claim"},
     "speaker:topic": {

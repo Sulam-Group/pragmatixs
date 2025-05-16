@@ -44,6 +44,7 @@ def parse_args():
     parser.add_argument("--preference", type=str, default=None)
     parser.add_argument("--listener_k", type=int, default=None)
     parser.add_argument("--temperature_scale", type=float, default=None)
+    parser.add_argument("--iterations", type=int, default=None)
     parser.add_argument("--workdir", type=str, default=C.workdir)
     parser.add_argument("--dist", action="store_true", default=False)
     return parser.parse_args()
@@ -77,13 +78,13 @@ def update_speaker(
     for i, data in enumerate(tqdm(dataloader)):
         image_tokens = data["image_tokens"].to(device)
         chosen = data["chosen"].to(device)
-        rejected = data["rejected"].to(device)
+        rej = data["rejected"].to(device)
         ref_chosen_logp = data["chosen_logp"].to(device)
         ref_rejected_logp = data["rejected_logp"].to(device)
 
         optimizer.zero_grad()
         chosen_output = speaker(image_tokens, chosen)
-        rejected_output = speaker(image_tokens, rejected)
+        rejected_output = speaker(image_tokens, rej)
 
         chosen_logp = chosen_output["explanation_logp"]
         rejected_logp = rejected_output["explanation_logp"]
@@ -179,7 +180,6 @@ def train_iteration(
         prediction_dataset=prediction_dataset,
         speaker=speaker,
         listener=listener,
-        epoch=epoch,
         workdir=workdir,
         device=device,
     )
@@ -206,7 +206,6 @@ def train_iteration(
         config=config,
         prediction_dataset=prediction_dataset,
         speaker=speaker,
-        epoch=epoch,
         workdir=workdir,
         device=device,
     )
@@ -240,48 +239,39 @@ def train_iteration(
             },
             step=monitor.global_samples,
         )
-    
+
+
 @torch.no_grad()
 def evaluate_classifier(
-    dataset, prediction_dataset: PredictionDataset, classifier: nn.Module, device: torch.device
+    dataset,
+    prediction_dataset: PredictionDataset,
+    classifier: nn.Module,
+    device: torch.device,
 ):
     classifier.eval()
     samples = dataset.get_classes_and_samples()
     Labels = [i[1] for i in samples[1]]
-    
+
     dataloader = DataLoader(prediction_dataset, batch_size=16, shuffle=False)
     Predictions = []
     for _, data in enumerate(tqdm(dataloader)):
         prediction = data["prediction"]
         Predictions.extend(prediction.tolist())
     # positive and negative ratios
-    positive_p = np.sum(np.array(Labels) == 1) 
+    positive_p = np.sum(np.array(Labels) == 1)
     negative_n = np.sum(np.array(Labels) == 0)
-    print(
-        f"Positive: {positive_p}, "
-        f"Negative: {negative_n}"
-    )
+    print(f"Positive: {positive_p}, Negative: {negative_n}")
     accuracy = np.sum(np.array(Labels) == np.array(Predictions)) / len(Labels)
     print(f"Accuracy: {accuracy:.2f}")
     # sensitivity and specificity
-    tp = np.sum(
-        np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 1)
-    )
-    tn = np.sum(
-        np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 0)
-    )
-    fp = np.sum(
-        np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 1)
-    )
-    fn = np.sum(
-        np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 0)
-    )
+    tp = np.sum(np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 1))
+    tn = np.sum(np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 0))
+    fp = np.sum(np.logical_and(np.array(Labels) == 0, np.array(Predictions) == 1))
+    fn = np.sum(np.logical_and(np.array(Labels) == 1, np.array(Predictions) == 0))
     sensitivity = tp / (tp + fn) if tp + fn > 0 else 0
 
     precision = tp / (tp + fp) if tp + fp > 0 else 0
-    f1_score = (
-        2 * precision * sensitivity / (precision + sensitivity)
-    )
+    f1_score = 2 * precision * sensitivity / (precision + sensitivity)
     specificity = tn / (tn + fp) if tn + fp > 0 else 0
     print(f"F1 score: {f1_score:.2f}")
     print(f"Sensitivity: {sensitivity:.2f}")
@@ -289,7 +279,6 @@ def evaluate_classifier(
     print(f"Precision: {precision:.2f}")
     print(f"TP: {tp}, TN: {tn}, FP: {fp}, FN: {fn}")
     print(f"TPR: {tp / (tp + fn):.2f}, TNR: {tn / (tn + fp):.2f}")
-        
 
 
 @torch.no_grad()
@@ -320,11 +309,19 @@ def evaluate(
         dataset, batch_size=config.training.batch_size, shuffle=False
     )
     for _, data in enumerate(tqdm(dataloader)):
-        image_tokens = data["image_tokens"].to(device) # (batch_size, seq_len, dim) (16, 256, 1024)
-        image_attribute = data["image_attribute"].to(device) # (batch_size, num_attributes) (16, 312)
-        prediction = data["prediction"].to(device) # (batch_size) (16)
+        image_tokens = data["image_tokens"].to(
+            device
+        )  # (batch_size, seq_len, dim) (16, 256, 1024)
+        image_attribute = data["image_attribute"].to(
+            device
+        )  # (batch_size, num_attributes) (16, 312)
+        prediction = data["prediction"].to(device)  # (batch_size) (16)
 
-        explanation, explanation_logp = explain(image_tokens)
+        length = config.data.explanation_length
+        if config.speaker.alpha > 0:
+            length = None
+
+        explanation, explanation_logp = explain(image_tokens, length=length)
         consistency, action = listen(image_attribute, explanation)
 
         explanation_claims = explanation[..., 0]
@@ -385,6 +382,7 @@ def main(args):
     listener_k = args.listener_k
     temperature_scale = args.temperature_scale
     preference = args.preference
+    iterations = args.iterations
     workdir = args.workdir
     dist = args.dist
 
@@ -408,6 +406,9 @@ def main(args):
         config.listener.temperature_scale = temperature_scale
     if preference is not None:
         config.listener.preference = preference
+    if iterations is not None:
+        config.training.iterations = iterations
+
     if config.listener.preference == "doctor":
         config.listener.prior = [1, 0]
     elif config.listener.preference == "patient":

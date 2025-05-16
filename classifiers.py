@@ -1,33 +1,25 @@
-import base64
-import os
 from abc import abstractmethod
 from collections.abc import Mapping
-from pathlib import Path
 
-import clip
-import numpy as np
 import open_clip
 import pandas as pd
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
-from health_multimodal.image import ImageInferenceEngine
 from health_multimodal.image.data.transforms import (
     create_chest_xray_transform_for_inference,
 )
 from health_multimodal.image.model.pretrained import get_biovil_t_image_encoder
 from health_multimodal.text.utils import BertEncoderType, get_bert_inference
-from openai import OpenAI
-from pydantic import BaseModel
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from configs.utils import Config
-from configs.utils import Constants as c
+from configs.utils import Constants as C
 
 
 class ImageClassifier(nn.Module):
-    def __init__(self, config: Config, device=c.device):
+    def __init__(self, config: Config, device=C.device):
         super().__init__()
         self.config = config
 
@@ -41,7 +33,7 @@ class ImageClassifier(nn.Module):
     @classmethod
     @abstractmethod
     def from_pretrained(
-        cls, config: Config, workdir=c.workdir, device=c.device
+        cls, config: Config, workdir=C.workdir, device=C.device
     ) -> "ImageClassifier":
         pass
 
@@ -68,7 +60,7 @@ def register_classifier(name: str):
 
 
 def get_classifier(
-    config: Config, from_pretrained=True, workdir=c.workdir, device=c.device
+    config: Config, from_pretrained=True, workdir=C.workdir, device=C.device
 ) -> ImageClassifier:
     classifier_name = config.data.classifier.split(":")[0].lower()
     Classifier = classifiers[classifier_name]
@@ -84,7 +76,7 @@ class OpenClipClassifier(ImageClassifier):
         "ViT-L-14": "laion2b_s32b_b82k",
     }
 
-    def __init__(self, config: Config, device=c.device):
+    def __init__(self, config: Config, device=C.device):
         super().__init__(config, device=device)
         backbone = config.data.classifier.split(":")[1]
 
@@ -98,14 +90,11 @@ class OpenClipClassifier(ImageClassifier):
         self.model.visual.output_tokens = True
 
         self.output_tokens = config.speaker.use_tokens
-        self.embed_dim = self.model.visual.output_dim  # 768
-        self.width = self.model.visual.proj.shape[
-            0
-        ]  # self.model.visual.proj.shape = (1024, 768)
-        print(self.embed_dim, self.width)
+        self.embed_dim = self.model.visual.output_dim
+        self.width = self.model.visual.proj.shape[0]
 
     @classmethod
-    def from_pretrained(cls, config: Config, workdir=c.workdir, device=c.device):
+    def from_pretrained(cls, config: Config, workdir=C.workdir, device=C.device):
         model = cls(config, device=device)
         model.eval()
         return model
@@ -165,111 +154,39 @@ class OpenClipClassifier(ImageClassifier):
         return pd.DataFrame(results)
 
 
-@register_classifier(name="ham_biomedclip")
-class HAMBiomedCLIP(ImageClassifier):
-    def __init__(self, config: Config, device=c.device):
-        super().__init__(config, device)
-
-        self.model, self.preprocess = open_clip.create_model_from_pretrained(
-            "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
-            device=device,
-        )
-
-        self.embed_dim = 512
-        n_classes = 7
-        self.proj = nn.Linear(self.embed_dim, n_classes)
-
-        nn.init.xavier_normal_(self.proj.weight)
-
-        self.to(device)
-        self.device = device
-
-    @classmethod
-    def from_pretrained(cls, config: Config, workdir=c.workdir, device=c.device):
-        model = cls(config, device=device)
-        state_dict = torch.load(
-            os.path.join(workdir, "weights", "ham_biomedclip.pt"), map_location=device
-        )
-        model.load_state_dict(state_dict)
-        return model
-
-    def encode_image(self, image):
-        image_features = self.model.encode_image(image).float()
-        return image_features / torch.linalg.norm(image_features, dim=-1, keepdim=True)
-
-    def forward(self, image):
-        image_features = self.encode_image(image)
-        logits = self.proj(image_features)
-        return {
-            "image_features": image_features,
-            "logits": logits,
-        }
-
-    @torch.no_grad()
-    def predict(self, dataset):
-        self.eval()
-
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
-
-        results = {"label": [], "prediction": []}
-        for data in tqdm(dataloader):
-            image, label = data
-
-            image = image.to(self.device)
-
-            output = self(image)
-            logits = output["logits"]
-            prediction = torch.argmax(logits, dim=-1).cpu()
-
-            results["label"].extend(label.squeeze().tolist())
-            results["prediction"].extend(prediction.squeeze().tolist())
-
-        return pd.DataFrame(results)
-
-
 @register_classifier(name="biomedvlp")
 class BiomedVLP(ImageClassifier):
-    def __init__(self, config: Config, device=c.device):
-        super().__init__(config, device)
+    def __init__(self, config: Config, device=C.device):
+        super().__init__(config, device=device)
 
-        # self.image_encoder = ImageInferenceEngine(
-        #     image_model=get_biovil_t_image_encoder(),
-        #     transform=create_chest_xray_transform_for_inference(
-        #         resize=512, center_crop_size=512
-        #     ),
-        # )
         self.preprocess = create_chest_xray_transform_for_inference(
             resize=512, center_crop_size=512
         )
         self.image_encoder = get_biovil_t_image_encoder()
         self.text_encoder = get_bert_inference(BertEncoderType.BIOVIL_T_BERT)
-        self.to(device)
         self.device = device
-        self.TASK = config.data.task
+        self.task = config.data.task
         self.embed_dim = 128
         self.width = 128
 
+        self.to(device)
+
     @classmethod
-    def from_pretrained(cls, config: Config, workdir=c.workdir, device=c.device):
+    def from_pretrained(cls, config: Config, workdir=C.workdir, device=C.device):
         model = cls(config, device=device)
         model.eval()
         return model
 
     def encode_text(self, text):
-        self.text_encoder.to(self.device)
         text_features = self.text_encoder.get_embeddings_from_prompt(text)
+        text_features = text_features.to(self.device)
         text_features = text_features / torch.linalg.norm(
             text_features, dim=-1, keepdim=True
         )
         return text_features
 
     def encode_image(self, image):
-        self.image_encoder.to(self.device)
         results = self.image_encoder(image)
-        # img_embedding: (16, 768)
-        # patch_embeddings: (16,  512, 16, 16)
-        # projected_global_embedding: (16, 128)
-        # projected_patch_embeddings: (16, 128, 16, 16)
         image_tokens = results.projected_patch_embeddings
         image_features = results.projected_global_embedding
         image_tokens = image_tokens.permute(0, 2, 3, 1).reshape(
@@ -303,15 +220,16 @@ class BiomedVLP(ImageClassifier):
 
         dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
 
-        classes = dataset.classes
-        class_prompts = [f"No signs of {self.TASK}", f"Findings suggesting {self.TASK}"]
+        class_prompts = [f"No signs of {self.task}", f"Findings suggesting {self.task}"]
         text_features = self.encode_text(class_prompts)
 
         results = {"label": [], "prediction": []}
         for data in tqdm(dataloader):
-            image_path, label = data[0], data[1]
+            image, label = data
 
-            output = self(image_path, text_features=text_features)
+            image = image.to(self.device)
+
+            output = self(image, text_features=text_features)
             logits = output["logits"]
             prediction = torch.argmax(logits, dim=-1).cpu()
 
@@ -319,176 +237,3 @@ class BiomedVLP(ImageClassifier):
             results["prediction"].extend(prediction.squeeze().tolist())
 
         return pd.DataFrame(results)
-
-
-class MONET(nn.Module):
-    templates = [
-        "This is dermatoscopy of {}",
-        "This is dermoscopy of {}",
-    ]
-    ref_templates = [
-        "This is dermatoscopy",
-        "This is dermoscopy",
-    ]
-
-    def __init__(self, workdir=c.workdir, device=c.device):
-        super().__init__()
-        backbone = "ViT-L/14"
-
-        self.model, _ = clip.load(backbone, device=device)
-        self.tokenize = clip.tokenize
-
-        self.preprocess = T.Compose(
-            [
-                T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
-                T.CenterCrop(224),
-                lambda x: x.convert("RGB"),
-                T.ToTensor(),
-                T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-            ]
-        )
-
-        self.embed_dim = self.model.visual.output_dim
-
-        state_path = os.path.join(workdir, "weights", "monet.pt")
-        state = torch.load(state_path, map_location=device)
-        self.model.load_state_dict(state)
-
-        self.to(device)
-        self.device = device
-
-    def encode_text(self, text):
-        text = self.tokenize(text).to(self.device)
-        text_features = self.model.encode_text(text).float()
-        return text_features / torch.linalg.norm(text_features, dim=-1, keepdim=True)
-
-    def encode_image(self, image):
-        image_features = self.model.encode_image(image).float()
-        return image_features / torch.linalg.norm(image_features, dim=-1, keepdim=True)
-
-    def forward(self, image, text=None, text_features=None):
-        assert text is not None or text_features is not None
-
-        image_features = self.encode_image(image)
-        if text_features is None:
-            text_features = self.encode_text(text)
-
-        logit_scale = self.model.logit_scale.exp()
-        logits_per_image = logit_scale * image_features @ text_features.t()
-        return {
-            "image_features": image_features,
-            "text_features": text_features,
-            "logits": logits_per_image,
-        }
-
-    @torch.no_grad()
-    def predict(self, dataset):
-        self.eval()
-
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
-
-        attributes = dataset.attributes
-        attributes = list(map(str.lower, attributes))
-        attribute_prompts = [t.format(a) for a in attributes for t in self.templates]
-
-        attribute_features = self.encode_text(attribute_prompts)
-        ref_features = self.encode_text(self.ref_templates)
-
-        results = np.zeros((len(dataset), len(attributes)))
-        start = 0
-        for data in tqdm(dataloader):
-            image, _ = data
-
-            image = image.to(self.device)
-
-            attribute_output = self(image, text_features=attribute_features)
-            ref_output = self(image, text_features=ref_features)
-
-            attribute_logits = attribute_output["logits"]
-            ref_logits = ref_output["logits"]
-
-            attribute_logits = attribute_logits.view(
-                -1, len(attributes), len(self.templates)
-            )
-            ref_logits = ref_logits.unsqueeze(1).expand(-1, len(attributes), -1)
-            attribute_probs = torch.sigmoid(attribute_logits - ref_logits)
-            attribute_probs = torch.amax(attribute_probs, dim=-1)
-
-            end = start + len(image)
-            results[start:end] = attribute_probs.cpu().numpy()
-            start = end
-
-        return results
-
-
-class GPTClassifier:
-    # prompt = (
-    #     "This is a dermatoscopy image of a skin lesion. "
-    #     + "Please answer to the best of your ability whether the following attributes"
-    #     " are present in the image: "
-    #     + {}
-    #     + ". "
-    #     + "Write your answer as a list with a number between 0 and 1 that represents"
-    #     " the likelihood of the presence of the attribute. "
-    #     + "For example, if you think the attribute is definitely not present, you can"
-    #     " write 0. If you think the attribute is definitely present, you can write 1."
-    #     " If you are unsure, you can write a number between 0 and 1. "
-    #     + "If you prefer to abstain from answering for a particular attribute, you can"
-    #     " write -1."
-    # )
-
-    def __init__(self, model):
-        self.model = model
-        self.client = OpenAI()
-
-    def predict(self, prompt, dataset):
-        class AttributeAnnotation(BaseModel):
-            attribute: str
-            label: float
-
-        class ImageAnnotation(BaseModel):
-            annotations: list[AttributeAnnotation]
-
-        def tobase64(path):
-            with open(path, "rb") as f:
-                return base64.b64encode(f.read()).decode("utf-8")
-
-        # attributes = dataset.attributes
-        # attributes = list(map(str.lower, attributes))
-        # prompt = prompt.format(", ".join(attributes))
-
-        responses = {}
-        for i, (path, _) in enumerate(tqdm(dataset.samples)):
-            res = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt,
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{tobase64(path)}"
-                                },
-                            },
-                        ],
-                    },
-                ],
-                response_format=ImageAnnotation,
-            )
-
-            for choice_idx, choice in enumerate(res.choices):
-                if path not in responses:
-                    responses[path] = {}
-
-                message = choice.message
-                parsed = message.parsed
-
-                if parsed:
-                    responses[path][choice_idx] = parsed.model_dump()
-                else:
-                    responses[path][choice_idx] = message.refusal

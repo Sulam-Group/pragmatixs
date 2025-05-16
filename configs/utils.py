@@ -133,11 +133,14 @@ class Config(ConfigDict):
         alpha = self.speaker.alpha
 
         run_name = (
-            f"_{dataset_name}"
+            f"{dataset_name}"
             f"_{listener_type}"
             f"_len{explanation_length}"
             f"_gamma{gamma}"
             f"_alpha{alpha}"
+            f"_b{self.speaker.k}"
+            f"_beta{self.speaker.beta}"
+            f"_k{self.listener.k}"
         )
         if listener_type in ["topic", "region"]:
             p = [f"{p:.2f}" for p in self.listener.prior]
@@ -150,19 +153,45 @@ class Config(ConfigDict):
         return os.path.join(out_dir, f"{self.run_name()}")
 
     def train_cache_dir(self, workdir=Constants.workdir):
-        train_cache_dir = os.path.join(workdir, "data", "train_cache", self.run_name())
+        import socket
+
+        hostname = socket.gethostname()
+        if hostname == "io85":
+            train_cache_dir = os.path.join(
+                workdir, "io85_data", "train_cache", self.run_name()
+            )
+        else:
+            train_cache_dir = os.path.join(
+                workdir, "data", "train_cache", self.run_name()
+            )
         os.makedirs(train_cache_dir, exist_ok=True)
         return train_cache_dir
 
     def state_path(self, workdir=Constants.workdir):
-        weight_dir = os.path.join(workdir, "weights", self.run_name())
+        import socket
+
+        hostname = socket.gethostname()
+        if hostname == "io85":
+            weight_dir = os.path.join(
+                workdir, "io85_weights", self.data.dataset.lower(), self.run_name()
+            )
+        else:
+            weight_dir = os.path.join(
+                workdir, "weights", self.data.dataset.lower(), self.run_name()
+            )
         os.makedirs(weight_dir, exist_ok=True)
         with open(os.path.join(weight_dir, "latest.txt")) as f:
             latest = f.read().strip()
         return os.path.join(weight_dir, latest)
 
     def results_path(self, workdir=Constants.workdir):
-        results_dir = os.path.join(workdir, "results", self.data.dataset.lower())
+        import socket
+
+        hostname = socket.gethostname()
+        if hostname == "io85":
+            results_dir = os.path.join(workdir, "io85_results", self.run_name())
+        else:
+            results_dir = os.path.join(workdir, "results", self.data.dataset.lower())
         os.makedirs(results_dir, exist_ok=True)
         return os.path.join(results_dir, f"{self.run_name()}.pkl")
 

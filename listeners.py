@@ -29,7 +29,7 @@ class Listener(nn.Module):
         listener = cls(config, n_classes, claims, device=device)
         state_path = config.state_path(workdir=workdir)
         state = torch.load(state_path, map_location=device)
-        
+
         listener.load_state_dict(state["listener"])
         listener.eval()
         return listener
@@ -190,20 +190,19 @@ class TopicListener(ClaimListener):
 
         self._super_forward = super().forward
 
-    # @staticmethod
     def load_attribute_topic(self, workdir=C.workdir):
         if self.data_name == "cub":
             attribute_dir = os.path.join(workdir, "data", "CUB", "attributes")
             with open(os.path.join(attribute_dir, "attribute_topic.txt"), "r") as f:
                 lines = f.readlines()
                 lines = [line.strip().split() for line in lines]
-                attribute_topic = [int(idx) for _, idx in lines ]
+                attribute_topic = [int(idx) for _, idx in lines]
         elif self.data_name == "chexpert":
-            attribute_topic = [1]*12
-        elif self.data_name == 'chexpert_augmented':
-            attribute_topic = [1]*12 +[2]*12
-        elif self.data_name == 'chexpert_augmentedv2':
-            attribute_topic = [1]*12 +[2]*10
+            attribute_topic = [1] * 12
+        elif self.data_name == "chexpert_augmented":
+            attribute_topic = [1] * 12 + [2] * 12
+        elif self.data_name == "chexpert_augmentedv2":
+            attribute_topic = [1] * 12 + [2] * 10
         return attribute_topic
 
     def get_explanation_topic(self, explanation):
@@ -221,73 +220,16 @@ class TopicListener(ClaimListener):
         return explanation_topic / norm
 
     def forward(self, explanation):
-        action = self._super_forward(explanation) # batch_size x n_classes
+        action = self._super_forward(explanation)  # batch_size x n_classes
 
-        prior = self.prior # prior distribution of topics (batch_size, n_topics)
-        explanation_topic = self.get_explanation_topic(explanation) # empirical distribution of topics (batch_size, n_topics)
+        prior = self.prior  # prior distribution of topics (batch_size, n_topics)
+        explanation_topic = self.get_explanation_topic(
+            explanation
+        )  # empirical distribution of topics (batch_size, n_topics)
         kl = torch.sum(
             explanation_topic
             * torch.log((explanation_topic + 1e-08) / (prior + 1e-08)),
             dim=-1,
         )
         temperature = self.temperature_scale * kl + 1
-        return action / temperature[:, None]
-
-
-@register_listener("region")
-class RegionListener(ClaimListener):
-    def __init__(
-        self,
-        config: Config,
-        n_classes: int,
-        claims: Iterable[str],
-        workdir=C.workdir,
-        device=C.device,
-    ):
-        super().__init__(config, n_classes, claims, workdir=workdir, device=device)
-        self.prior = torch.tensor(config.listener.prior).to(device)
-        self.temperature_scale = config.listener.temperature_scale
-
-        attribute_regions = self.load_attribute_regions(workdir=workdir)
-        attribute_regions = torch.stack(attribute_regions, dim=1)
-        attribute_regions = attribute_regions.flatten(0, 1)
-        attribute_regions = torch.cat(
-            [attribute_regions, torch.zeros(3, attribute_regions.size(-1))]
-        )
-        self.attribute_regions = attribute_regions.to(device)
-
-        self._super_forward = super().forward
-
-    @staticmethod
-    def load_attribute_regions(workdir=C.workdir):
-        attribute_dir = os.path.join(workdir, "data", "CUB", "attributes")
-        attribute_pos_regions = np.loadtxt(
-            os.path.join(attribute_dir, "attribute_positive_regions.txt")
-        )
-        attribute_neg_regions = np.loadtxt(
-            os.path.join(attribute_dir, "attribute_negative_regions.txt")
-        )
-        attribute_pos_regions = torch.from_numpy(attribute_pos_regions).float()
-        attribute_neg_regions = torch.from_numpy(attribute_neg_regions).float()
-        return attribute_pos_regions, attribute_neg_regions
-
-    def get_explanation_regions(self, explanation):
-        claims = self.prepare_claims_for_listener(explanation)
-        claims_mask = claims != self.pad_token_id
-
-        attribute_regions = self.attribute_regions.unsqueeze(0).expand(
-            claims.size(0), -1, -1
-        )
-        _claims = claims.unsqueeze(-1).expand(-1, -1, attribute_regions.size(-1))
-        explanation_regions = torch.gather(attribute_regions, 1, _claims)
-        explanation_regions = torch.sum(explanation_regions, dim=1)
-        return explanation_regions / torch.sum(claims_mask, dim=1, keepdim=True)
-
-    def forward(self, explanation):
-        action = self._super_forward(explanation)
-
-        prior = self.prior
-        explanation_regions = self.get_explanation_regions(explanation)
-        d = torch.sum(torch.abs(prior[None, :] - explanation_regions), dim=-1)
-        temperature = torch.exp(self.temperature_scale * d)
         return action / temperature[:, None]

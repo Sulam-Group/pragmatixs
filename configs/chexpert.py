@@ -7,7 +7,7 @@ class CheXpertClaimConfig(Config):
         super().__init__()
         self.data.dataset = "chexpert"
         self.data.classifier = "BiomedVLP"
-        self.data.explanation_length = [4, 8, 12]
+        self.data.explanation_length = [4, 6, 8]
         self.data.task = "Lung Opacity"
 
         self.speaker.beta = 0.6

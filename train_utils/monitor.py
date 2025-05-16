@@ -1,4 +1,5 @@
 import os
+import socket
 from collections.abc import Mapping
 
 import numpy as np
@@ -73,7 +74,13 @@ class Monitor:
         epoch: int = None,
         workdir=C.workdir,
     ):
-        weights_dir = os.path.join(workdir, "weights", self.run_name)
+        hostname = socket.gethostname()
+        if hostname == "io85":
+            weights_dir = os.path.join(workdir, "io85_weights", self.run_name)
+        else:
+            weights_dir = os.path.join(
+                workdir, "weights", self.config.data.dataset.lower(), self.run_name
+            )
         os.makedirs(weights_dir, exist_ok=True)
 
         dist = self.config.data.distributed
